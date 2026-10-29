@@ -1,0 +1,18 @@
+{
+  "name": "@salven/voice-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "test": "vitest run --root ../.. services/voice-runtime/tests",
+    "typecheck": "tsc --noEmit --pretty false -p tsconfig.json"
+  },
+  "dependencies": {
+    "@salven/contracts": "workspace:*",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1"
+  }
+}

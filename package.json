@@ -3,14 +3,26 @@
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.9.0",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc --noEmit --pretty false"
+    "typecheck": "tsc -b --pretty false && tsc -p tsconfig.scripts.json --pretty false",
+    "benchmark:local-fixture": "tsx benchmarks/voice-receptionist/src/local-fixture-run.ts",
+    "benchmark:scorecard": "vitest run scripts/voice-receptionist-scorecard.test.ts"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
-    "typescript": "^5.8.3",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.20.0",
+    "typescript": "5.8.3",
     "vitest": "^3.2.0"
+  },
+  "dependencies": {
+    "openai": "^7.23.0",
+    "postgres": "^3.4.9",
+    "ws": "^8.18.3",
+    "zod": "^3.25.0"
   }
 }

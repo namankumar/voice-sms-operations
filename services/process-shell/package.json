@@ -1,0 +1,22 @@
+{
+  "name": "@salven/process-shell",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit --pretty false -p tsconfig.json",
+    "test": "vitest run --root ../.. services/process-shell/tests"
+  },
+  "dependencies": {
+    "@salven/contracts": "workspace:*",
+    "@salven/voice-runtime": "workspace:*",
+    "openai": "^7.23.0",
+    "postgres": "^3.4.9",
+    "ws": "^8.18.3",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@salven/testing": "workspace:*",
+    "@types/ws": "^8.18.1"
+  }
+}

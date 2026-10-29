@@ -1,0 +1,20 @@
+{
+  "format": {
+    "container": "WAV",
+    "encoding": "PCM_S16LE",
+    "sample_rate": 16000,
+    "channels": 1
+  },
+  "clips": [
+    {
+      "profile": "synthetic",
+      "utterance": "appointment-change",
+      "transcript": "I need to change an appointment.",
+      "file": "synthetic-appointment-change.wav",
+      "audio": {
+        "sha256": "643f8a8dc8bd9c19225afffad2becfec5426180b3749cb208abdf1a6c8354efc",
+        "duration_seconds": 1
+      }
+    }
+  ]
+}

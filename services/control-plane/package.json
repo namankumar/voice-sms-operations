@@ -4,5 +4,12 @@
   "private": true,
   "type": "module",
   "exports": "./src/index.ts",
-  "dependencies": { "@salven/contracts": "workspace:*" }
+  "scripts": {
+    "typecheck": "tsc --noEmit --pretty false -p tsconfig.json",
+    "test": "vitest run --config vitest.config.ts"
+  },
+  "dependencies": {
+    "@salven/contracts": "workspace:*",
+    "postgres": "^3.4.9"
+  }
 }

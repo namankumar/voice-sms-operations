@@ -1,36 +1,28 @@
-# Authority-Gated Call Resolution Core
+# Voice + SMS Operations: Offline Benchmark Slice
 
-This is an extracted TypeScript runtime slice for a request that needs more than a plausible reply: current verification, a parameter-bound authorization, durable workflow state, provider reconciliation, audible completion evidence, and an owned human fallback.
+This repository contains the original authority-gated operations core plus a source-authentic, sanitized offline voice-receptionist fixture. It is designed to make a narrow claim reproducible: a controlled synthetic input can pass through signed local admission, local SIP binding, durable PostgreSQL readback, and a response-frame observation without contacting a carrier, model, speech provider, or external network.
 
-It is actual implementation code and its original offline integration test, exported with generic synthetic fixtures. The package includes a PostgreSQL workflow repository and schema contract, alongside in-memory repositories used by the offline tests. It includes no database client, connection configuration, credentials, hosted configuration, call recordings, transcripts, contact details, or phone/SMS provider adapter.
+It is not a production voice demo and it makes no claim that a caller bridge, handset audio, ASR, model reasoning, TTS, transfer, callback, SMS delivery, or cost was verified.
 
-## The control flow
+## What the offline benchmark proves
 
 ```mermaid
 flowchart LR
-  A[Active request + goal] --> B[Verify scoped factors]
-  B --> C[Evaluate current-state policy]
-  C -->|single-use permit| D[Persist request + idempotency key]
-  D --> E[Synthetic provider read]
-  E --> F[Issue pending spoken directive]
-  F -->|trusted heard receipt| G[Resolve]
-  C -->|deny / review| H[Handoff pending]
-  E -->|timeout / uncertain| H
-  H -->|accepted by owner| I[Handoff accepted]
-  H -->|transfer fails| J[Owned callback]
+  A[Controlled synthetic WAV + transcript] --> B[Signed local HTTP admission]
+  B --> C[Local SIP binding]
+  C --> D[Injected local fixture events]
+  D --> E[Durable PostgreSQL readback]
+  E --> F[Response-frame observation]
+  F --> G[Scorecard: validity unknown
+outcome inconclusive]
+  H[Carrier / model / handset / TTS] -. deliberately absent .-> G
 ```
 
-The code deliberately separates three claims that are often incorrectly collapsed:
+The fixture never dials, sends an SMS, records a call, or calls a provider endpoint. Local `fetch` is restricted by the harness to loopback HTTP. The synthetic WAV is one second of silence paired with a generic scheduling transcript; it is a supplied input, not ASR evidence.
 
-1. An action was authorized for this request, subject, parameters, and state version.
-2. A provider returned a verified readback.
-3. The caller-facing directive was actually acknowledged as heard.
+## Run it locally
 
-A terminal answer requires all applicable evidence; a transfer remains pending until an owner accepts it.
-
-## Run the actual offline suite
-
-Requires Node 22+ and pnpm 11+.
+Requirements: Node 22+, pnpm 11+, and PostgreSQL command-line tools (`initdb`, `pg_ctl`, `psql`) on `PATH`. The fixture creates and removes a local loopback PostgreSQL cluster; it does not need a database server or credentials.
 
 ```sh
 pnpm install --frozen-lockfile --ignore-scripts
@@ -38,39 +30,35 @@ pnpm test
 pnpm typecheck
 ```
 
-The included test suite has 22 offline cases. It uses in-memory authority, repository, protected-content, heard-receipt, and synthetic-provider fakes. It does not make network, speech, model, database, or provider calls.
+Expected result: 36 passing tests. This includes the original 22 core authority tests, 10 local signed-admission/SIP/PostgreSQL harness tests, and 4 scorecard tests.
 
-The cases cover, among other boundaries:
+The harness deliberately treats its own joined evidence as lower tier:
 
-- stale state blocking a provider read;
-- parameter-bound, single-use permit consumption;
-- persistence of an idempotency key before provider work;
-- rejecting forged or replayed heard receipts;
-- identity expiry and subject mismatch;
-- unresolved provider work remaining owned for reconciliation;
-- explicit/repeated-failure handoff, accepted handoff, and failed-transfer callback ownership;
-- direct-adapter bypass rejection and aggregate-memory redaction.
+- `validity: "unknown"`
+- `outcome: "inconclusive"`
+- no goals graded as completed, accepted transfer, or owned callback
+- null model, tool, latency, and cost fields
+
+A scorecard pass requires valid evidence and terminally owned goals. A saved message alone is not an owned callback; a connected carrier leg alone is not an accepted transfer.
 
 ## Package layout
 
-| Path | Actual component | Offline role in this export |
-|---|---|---|
-| `packages/contracts` | Typed state, permit, event, and workflow contracts | Validates state shape and allowed transitions. |
-| `services/control-plane` | Current-state policy and permit authority | Issues and consumes scoped permits against an in-memory repository. |
-| `packages/intergy-simulator` | Stateful synthetic provider adapter | Exercises parameter binding, idempotency, receipts, readback, and controlled failures without a live provider. |
-| `services/call-orchestrator` | Appointment-details orchestration | Coordinates verification, policy, protected evidence, readback, spoken-directive state, and handoff recovery. |
+| Path | Role |
+| --- | --- |
+| `services/call-orchestrator` | Original 22-case authority and workflow core. |
+| `scripts/verification-voice-app.ts` | Existing local evaluation harness for signed admission, SIP binding, and durable readback. |
+| `benchmarks/voice-receptionist/src` | Scorecard and intentionally inconclusive local-fixture adapter. |
+| `benchmarks/voice-receptionist/fixtures/synthetic` | Reserved synthetic silence WAV and generic transcript. |
+| `services/process-shell` | Actual receptionist composition dependency closure, redacted only for practice identity and endpoints. |
 
-## Export boundary
+## Public-export boundary and provenance
 
-This repository is a portable core, not the full runtime. Deliberately excluded:
+This is a sanitized, source-authentic dependency slice, not a replay of a private deployment. The control flow and dependency graph are retained; only client/practice labels, location facts, direct-demo endpoints, and private source-history identifiers are mechanically replaced with generic synthetic values.
 
-- database drivers, live connections, deployment migrations and connection configuration; the workflow repository and schema contract are retained, with a small offline pool type stub;
-- any telephony, speech, SMS, model, webhook, or network adapter;
-- client-specific practice facts, raw evidence, identifiers, operational records, and deployment material;
-- authentication, tenant management, actual human-routing infrastructure, and live provider integration.
+`benchmarks/voice-receptionist/PUBLIC_EXPORT_MANIFEST.json` records public artifact identities and content digests. It intentionally contains no private parent commit IDs, private source paths, original transform map, client records, recordings, raw transcripts, credentials, or private configuration.
 
-The retained interfaces show where those boundaries attach, but this export cannot place or receive a call, deliver a message, look up a real record, or prove live audio/model behavior. Passing the offline suite demonstrates the checked state and authority mechanics only; it does not establish production readiness or business outcomes.
+Excluded by design: provider credentials, phone/SMS numbers other than reserved synthetic test values, client names and facts, recordings, real caller audio, raw transcripts, private run outputs, caches, private git history, and all deployment material.
 
-## Fixture note
+## Limits
 
-All fixture identifiers, appointment labels, and timestamps in this export are generic synthetic values. They were redacted from the source fixture/test literals while preserving the original control-flow assertions.
+A passing local test suite means the exported local fixture and core control mechanics ran. It does **not** establish operational effectiveness, production readiness, or improvement over a private baseline. For that, a separately authorized evaluation needs a causally joined caller bridge and appropriate evidence for every claimed tier.

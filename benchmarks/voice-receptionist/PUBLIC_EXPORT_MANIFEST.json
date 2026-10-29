@@ -1,0 +1,53 @@
+{
+  "schemaVersion": "voice-sms-public-export/v1",
+  "tier": "offline_local_fixture_only",
+  "publicArtifacts": [
+    "public-baseline-fixture-v1",
+    "public-candidate-fixture-v1"
+  ],
+  "sourceAuthenticity": {
+    "implementation": "sanitized dependency closure of actual offline composition and existing evaluation harness",
+    "privateReleaseHistory": "excluded",
+    "privateTransformMap": "excluded"
+  },
+  "evidenceBoundary": {
+    "validity": "unknown",
+    "outcome": "inconclusive",
+    "excludedClaims": [
+      "carrier",
+      "caller_bridge",
+      "handset_audio",
+      "ASR",
+      "model",
+      "TTS",
+      "heard_audio",
+      "transfer",
+      "callback",
+      "SMS_delivery",
+      "cost"
+    ]
+  },
+  "syntheticFixture": {
+    "kind": "reserved_synthetic_pcm_and_transcript",
+    "manifestSha256": "sha256:d217d926f6cc58357006d5910eb60c9f865b3eedd1ac91eada7cc7781b559274"
+  },
+  "content": {
+    "trackedFileCount": 179,
+    "contentFileCountExcludingManifest": 178,
+    "aggregateSha256ExcludingManifest": "sha256:1019d886178f360f86cb62d9a8b07e11fc9f950442a4abf53e2381cfab873238"
+  },
+  "redaction": {
+    "excluded": [
+      "client identity",
+      "practice facts",
+      "real numbers",
+      "raw transcripts",
+      "recordings",
+      "credentials",
+      "private configuration",
+      "private run outputs",
+      "private git history"
+    ],
+    "reservedSyntheticLabel": "Synthetic Practice"
+  }
+}

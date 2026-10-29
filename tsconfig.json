@@ -1,14 +1,20 @@
 {
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "exactOptionalPropertyTypes": true,
-    "noEmit": true,
-    "skipLibCheck": true,
-    "types": ["node"]
-  },
-  "include": ["packages/**/*.ts", "services/**/*.ts"]
+  "files": [],
+  "references": [
+    {
+      "path": "packages/contracts"
+    },
+    {
+      "path": "packages/testing"
+    },
+    {
+      "path": "services/control-plane"
+    },
+    {
+      "path": "services/voice-runtime"
+    },
+    {
+      "path": "services/process-shell"
+    }
+  ]
 }
