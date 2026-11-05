@@ -139,7 +139,7 @@ export function knowledgePackDigest(pack: ReviewedKnowledgePack): string {
   return `sha256:${createHash("sha256").update(JSON.stringify(reviewedKnowledgePackSchema.parse(pack))).digest("hex")}`;
 }
 
-export const vegasVascularKnowledgePack = reviewedKnowledgePackSchema.parse({
+export const syntheticVascularKnowledgePack = reviewedKnowledgePackSchema.parse({
   schemaVersion: 1,
   packId: "synthetic-practice-demo-knowledge",
   packVersion: "know-03-v2",
@@ -168,9 +168,9 @@ export const vegasVascularKnowledgePack = reviewedKnowledgePackSchema.parse({
   }))],
 });
 
-export const vegasVascularKnowledgeDigest = "sha256:33956703f5139cbcf5e6d931f758f0cf1ee6d0ff24154ca964212faef85dc05d";
+export const syntheticVascularKnowledgeDigest = "sha256:33956703f5139cbcf5e6d931f758f0cf1ee6d0ff24154ca964212faef85dc05d";
 export function querySyntheticPracticeKnowledge(query: KnowledgeQuery): KnowledgeQueryResult {
-  return queryPinnedKnowledge(vegasVascularKnowledgePack, vegasVascularKnowledgeDigest, query);
+  return queryPinnedKnowledge(syntheticVascularKnowledgePack, syntheticVascularKnowledgeDigest, query);
 }
 
 /** Synthetic fixture alias only; production EMR locations require their own reviewed mapping. */

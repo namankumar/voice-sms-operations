@@ -20,7 +20,7 @@ function aad(scope: ConversationScope, attemptId: string) { return { domain: "si
 export class PostgresSipBindings {
   private readonly sql: ReturnType<typeof postgres>;
   constructor(databaseUrl: string, private readonly cipher: ConversationCipher, private readonly clock: () => Date = () => new Date()) {
-    this.sql = postgres(databaseUrl, { max: 3, connect_timeout: 5, onnotice: () => {}, connection: { application_name: "vegas-sip-binding" } });
+    this.sql = postgres(databaseUrl, { max: 3, connect_timeout: 5, onnotice: () => {}, connection: { application_name: "synthetic-sip-binding" } });
   }
 
   async create(raw: { scope: ConversationScope; projectId: string }): Promise<SipAttemptBinding> {

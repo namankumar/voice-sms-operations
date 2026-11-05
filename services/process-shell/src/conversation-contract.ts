@@ -9,7 +9,7 @@ import { controlledTransferAttemptSchema } from "./controlled-test-transfer.js";
 import { approvedEmergencySmsInstruction } from "./receptionist-emergency-text.js";
 import { isReceptionistCallerExit } from "./receptionist-callback-dialogue.js";
 import { isClearDecline, isExplicitPendingSlotWithdrawal } from "./f2-dialogue-evidence.js";
-import { receptionistPublicFaqTopicSchema } from "./receptionist-public-faq.js";
+import { receptionistPublicFaqReferenceMatches, receptionistPublicFaqTopicSchema, resolveReceptionistPublicFaq, sameSelectedOfficePublicFaqTopic } from "./receptionist-public-faq.js";
 export { routeCategorySchema } from "./route-category.js";
 
 export const conversationIdSchema = z.string().min(1).max(200);
@@ -20,13 +20,14 @@ const inputFragmentsSchema = z.array(z.object({ sourceId: id, body: text }).stri
 const unsupportedMediaCount = z.number().int().min(0).max(10);
 const failureReason = z.enum(["sandbox_not_joined"]);
 const sha256 = z.string().regex(/^sha256:[a-f0-9]{64}$/);
+const twilioStreamId = z.string().regex(/^MZ[a-fA-F0-9]{32}$/);
 const questionKindSchema = z.enum(["callback_number", "general", "name", "message", "callback_number_entry",
   "patient_status", "identity_dob", "identity_zip", "slot_selection", "appointment_consent", "attendance_consent", "request_clarification"]);
 export { approvedEmergencySmsInstruction };
 const controlledOutcomeSchema = z.enum(["accepted", "busy", "refused", "no_answer", "failed", "canceled", "late_accept"]);
 const controlledAcceptanceSchema = z.object({ recipientId: id, childCallId: id, acceptedAt: z.string().datetime({ offset: true }) }).strict();
 const controlledRecordSchema = z.object({ attempt: controlledTransferAttemptSchema,
-  dispatch: z.enum(["prepared", "submitting", "submitted", "unknown"]), outcome: controlledOutcomeSchema.nullable(),
+  dispatch: z.enum(["prepared", "submitting", "submitted", "unknown", "aborted"]), outcome: controlledOutcomeSchema.nullable(),
   acceptance: controlledAcceptanceSchema.nullable(), resumedVoiceEpoch: revision.nullable().default(null) }).strict();
 const simulatedRouteOutcomeSchema = z.object({
   id, sourceId: id, requestId: id, requestRevision: revision, ownerEpoch: revision, instanceId: id,
@@ -52,6 +53,8 @@ export const admissionSchema = z.object({
     z.object({ stage: z.literal("operator_demo"), profileSha256: sha256 }).strict(),
     z.object({ stage: z.literal("rehearsal"), profileSha256: sha256, qualificationSha256: sha256 }).strict(),
   ]).optional(),
+  // Pinned at admission. Older snapshots and ordinary calls retain SIP.
+  voicePlayback: z.enum(["legacy_sip", "primary_media"]).default("legacy_sip"),
   // Only signed synthetic voice ingress may attach this immutable receipt. It
   // records a per-call test authority without retaining the caller binding.
   controlledHours: z.object({
@@ -92,7 +95,9 @@ const receptionistPublicFaqReferenceSchema = z.object({ packId: id, packVersion:
 const requestSchema = z.object({
   id, revision, category: routeCategorySchema.nullable(), originalRequest: z.string().max(8000),
   name: z.string().max(200), callbackNumber: z.string().max(16), callbackConfirmed: z.boolean(),
-  confirmationSourceId: id.nullable(), callbackMessageSourceId: id.nullable().optional(), owner: id.nullable(), outcome: text.nullable(),
+  // Optional for older snapshots; server-stamped only by accepted contact writes.
+  nameSourceId: id.optional(), callbackNumberSourceId: id.optional(),
+  confirmationSourceId: id.nullable(), callbackMessageSourceId: id.nullable().optional(), callbackMessageText: z.string().trim().min(1).max(8000).optional(), owner: id.nullable(), outcome: text.nullable(),
   sourceIds: z.array(id).max(32), proposalRevision: revision,
   fullProposal: fullRequestProposalSchema.optional(),
   /** Server-stamped receptionist-only public FAQ reference; no freeform query or answer is persisted here. */
@@ -107,6 +112,11 @@ const requestSchema = z.object({
   aiResolution: aiResolutionResultSchema.nullable().optional(),
   state: z.enum(["draft", "needs_callback", "in_progress", "completed", "ai_resolved", "abandoned"]),
 }).strict().superRefine((request, context) => {
+  for (const field of ["nameSourceId", "callbackNumberSourceId"] as const) {
+    const sourceId = request[field];
+    if (sourceId !== undefined && !request.sourceIds.includes(sourceId)) context.addIssue({ code: z.ZodIssueCode.custom, path: [field], message: "contact_source_not_in_request" });
+  }
+  if (request.callbackMessageText !== undefined && (request.callbackMessageSourceId == null || !request.sourceIds.includes(request.callbackMessageSourceId))) context.addIssue({ code: z.ZodIssueCode.custom, path: ["callbackMessageText"], message: "callback_message_value_source_missing" });
   if (request.state === "ai_resolved" && request.aiResolution === null || request.state === "ai_resolved" && request.aiResolution === undefined) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["aiResolution"], message: "ai_resolution_proof_required" });
   }
@@ -123,9 +133,32 @@ const recoverySchema = z.object({
   failureDomain: recoveryFailureDomainSchema.default("openai_provider_or_scope_unknown"),
   state: z.enum(["claimed", "redirecting", "attached", "outcome_unknown", "parent_gone"]),
   parentCallId: id, childCallId: id, triggerEventId: id, attachmentId: id.nullable(),
-  callerEndSourceId: id.optional(), callerEndEventId: id.optional(),
+  callerEndSourceId: id.optional(), callerEndEventId: id.optional(), documentIssuedAt: z.string().datetime().optional(),
   scriptedEmptyAttempts: z.number().int().min(0).max(3).default(0),
   createdAt: z.string().datetime(), updatedAt: z.string().datetime(),
+}).strict();
+const primaryMediaSchema = z.object({
+  attachmentId: id, purpose: z.literal("primary_media"), parentCallId: id, accountId: id,
+  ownerEpoch: revision, voiceEpoch: revision, configVersion: id, profileSha256: sha256,
+  capabilityDigest: sha256, expiresAt: z.string().datetime({ offset: true }),
+  state: z.enum(["issued", "attached", "model_bound", "closed", "superseded"]),
+  streamId: twilioStreamId.nullable(), modelSessionId: id.nullable(), configFingerprint: sha256.nullable(),
+  inputPipelineArmed: z.boolean(),
+  opening: z.object({ state: z.enum(["unissued", "issued", "playing", "completed", "interrupted", "failed"]),
+    presentationId: id.nullable(), markId: id.nullable() }).strict(),
+  issuedAt: z.string().datetime({ offset: true }), attachedAt: z.string().datetime({ offset: true }).nullable(),
+  closedAt: z.string().datetime({ offset: true }).nullable(),
+}).strict();
+const messageContinuationSchema = z.object({
+  id, mode: z.enum(["inline", "fresh"]), reason: z.enum(["closed_hours", "route_unavailable", "clarification_exhausted", "no_answer", "busy", "refused", "failed", "canceled", "late_accept"]),
+  state: z.enum(["issued", "attached", "closed", "superseded"]),
+  fromAttachmentId: id, transferId: id.nullable(), sourceEventId: id, transitionEventId: id,
+  parentCallId: id, accountId: id, ownerEpoch: revision, voiceEpoch: revision,
+  configVersion: id, profileSha256: sha256, streamId: twilioStreamId.nullable(),
+  capabilityDigest: sha256.nullable(), expiresAt: z.string().datetime({ offset: true }).nullable(),
+  documentIssuedAt: z.string().datetime({ offset: true }).nullable(),
+  attachedAt: z.string().datetime({ offset: true }).nullable(), closedAt: z.string().datetime({ offset: true }).nullable(),
+  callerEndSourceId: id.nullable(), callerEndEventId: id.nullable(),
 }).strict();
 const emergencySchema = z.object({ sourceEventId: id, declaredRevision: revision }).strict();
 export const conversationSchema = z.object({
@@ -144,6 +177,10 @@ export const conversationSchema = z.object({
   unsupportedNonTextCount: z.number().int().nonnegative().default(0),
   emergency: emergencySchema.nullable().default(null),
   pendingQuestion: z.object({ id, kind: questionKindSchema, requestId: id.nullable(), requestRevision: revision.nullable(), callbackNumber: z.string().nullable(), activatedRevision: revision }).strict().nullable(),
+  publicFaqChoice: z.object({ requestId: id, sourceId: id, sourceRevision: revision, ownerEpoch: revision, voiceEpoch: revision,
+    questionTopic: z.literal("locations"), reference: receptionistPublicFaqReferenceSchema,
+    state: z.enum(["asked", "answered"]), answerSourceId: id.optional(), answerTopic: z.enum(["address", "demo_way_directions", "sample_city_address"]).optional(),
+    answerReference: receptionistPublicFaqReferenceSchema.optional() }).strict().nullable().default(null),
   questionIds: z.array(id).max(64),
   clarificationCount: z.number().int().min(0).max(1).default(0),
   transfers: z.array(z.object({ id, requestId: id, requestRevision: revision, voiceEpoch: revision,
@@ -151,7 +188,9 @@ export const conversationSchema = z.object({
     state: z.enum(["trying", "no_answer", "busy", "failed", "canceled"]) }).strict()).max(16).default([]),
   inputs: z.array(z.object({ id, body: text, sequence: revision, fragments: inputFragmentsSchema.optional(), questionId: id.optional(), questionKind: questionKindSchema.optional() }).strict()).max(64),
   callerContext: z.array(z.object({ sourceId: id, text: z.string().trim().min(1).max(160), historical: z.literal(true), verified: z.literal(false) }).strict()).max(8).default([]),
-  requests: z.array(requestSchema).max(16), messages: z.array(messageSchema).max(64), recoveries: z.array(recoverySchema).max(2),
+  requests: z.array(requestSchema).max(16), messages: z.array(messageSchema).max(64), recoveries: z.array(recoverySchema).max(3),
+  primaryMedia: primaryMediaSchema.nullable().default(null),
+  messageContinuation: messageContinuationSchema.nullable().default(null),
   createdAt: z.string().datetime(), updatedAt: z.string().datetime(),
 }).strict();
 export type Conversation = z.infer<typeof conversationSchema>;
@@ -167,6 +206,7 @@ export const commandSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("controlled_transfer.update"), attempt: controlledTransferAttemptSchema }).strict(),
   z.object({ type: z.literal("controlled_transfer.finish"), transferId: id, outcome: controlledOutcomeSchema,
     acceptance: controlledAcceptanceSchema.optional() }).strict(),
+  z.object({ type: z.literal("controlled_transfer.abort"), transferId: id }).strict(),
   z.object({ type: z.literal("controlled_transfer.resume"), transferId: id }).strict(),
   z.object({ type: z.literal("simulated_route.record"), outcome: simulatedRouteOutcomeSchema }).strict(),
   z.object({ type: z.literal("monitor.correction_claim"), reviewId: id }).strict(),
@@ -179,6 +219,11 @@ export const commandSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("question.clear_verified_identity"), questionId: id, requestId: id }).strict(),
   z.object({ type: z.literal("question.pause_callback"), questionId: id, requestId: id, sourceEventId: id }).strict(),
   z.object({ type: z.literal("clarification.ask") }).strict(),
+  z.object({ type: z.literal("public_faq.choice_ask"), requestId: id, sourceEventId: id,
+    reference: receptionistPublicFaqReferenceSchema }).strict(),
+  z.object({ type: z.literal("public_faq.choice_answer"), requestId: id, sourceEventId: id,
+    topic: z.enum(["address", "demo_way_directions", "sample_city_address"]),
+    reference: receptionistPublicFaqReferenceSchema }).strict(),
   z.object({ type: z.literal("emergency.assess"), sourceEventId: id,
     classification: z.enum(["caller_emergency", "urgent_unclear"]) }).strict(),
   z.object({ type: z.literal("transfer.start"), transferId: id, requestId: id, requestRevision: revision,
@@ -189,18 +234,20 @@ export const commandSchema = z.discriminatedUnion("type", [
     receptionistPublicFaqTopic: receptionistPublicFaqTopicSchema.optional(),
     receptionistPublicFaqReference: receptionistPublicFaqReferenceSchema.optional(),
     sourceEventId: id.optional(), originalSourceEventId: id.optional(), sourceEventIds: z.array(id).min(1).max(8).optional(),
-    originalRequest: text.optional(), name: z.string().trim().min(1).max(200).optional(),
-    callbackNumber: z.string().regex(/^\+[1-9]\d{7,14}$/).optional() }).strict(),
+    originalRequest: text.optional(), callbackMessage: z.string().trim().min(1).max(8000).optional(),
+    callbackMessageAction: z.enum(["record", "replace"]).optional(), name: z.string().trim().min(1).max(200).optional(),
+    callbackNumber: z.string().regex(/^\+[1-9]\d{7,14}$/).optional(), clearCallbackNumber: z.literal(true).optional() }).strict(),
   z.object({ type: z.literal("request.abandon"), requestId: id, questionId: id, sourceEventId: id }).strict(),
   z.object({ type: z.literal("request.abandon_callback"), requestId: id, resumeRequestId: id, questionId: id, sourceEventId: id }).strict(),
-  z.object({ type: z.literal("request.capture_callback_message"), requestId: id, sourceEventId: id, name: z.string().trim().min(1).max(200).optional(), callbackNumber: z.string().regex(/^\+[1-9]\d{7,14}$/).optional() }).strict(),
+  z.object({ type: z.literal("request.capture_callback_message"), requestId: id, sourceEventId: id, messageSourceEventId: id.optional(), message: z.string().trim().min(1).max(8000).optional(), name: z.string().trim().min(1).max(200).optional(), callbackNumber: z.string().regex(/^\+[1-9]\d{7,14}$/).optional(), clearCallbackNumber: z.literal(true).optional() }).strict(),
+  z.object({ type: z.literal("request.begin_callback_message_replacement"), requestId: id, sourceEventId: id, name: z.string().trim().min(1).max(200).optional(), callbackNumber: z.string().regex(/^\+[1-9]\d{7,14}$/).optional(), clearCallbackNumber: z.literal(true).optional() }).strict(),
   z.object({ type: z.literal("request.confirm_callback"), requestId: id, callbackNumber: z.string().regex(/^\+[1-9]\d{7,14}$/), sourceEventId: id }).strict(),
   z.object({ type: z.literal("request.confirm_and_capture_callback"), requestId: id, callbackNumber: z.string().regex(/^\+[1-9]\d{7,14}$/), sourceEventId: id }).strict(),
   z.object({ type: z.literal("request.capture"), requestId: id }).strict(),
   z.object({ type: z.literal("request.degraded_callback_handoff"), recoveryId: id, sourceRequestId: id, sourceRequestRevision: revision, callbackRequestId: id }).strict(),
   z.object({ type: z.literal("request.supplement"), requestId: id, sourceEventId: id }).strict(),
   z.object({ type: z.literal("request.correct_contact"), requestId: id, sourceEventId: id,
-    name: z.string().trim().min(1).max(200).optional(), callbackNumber: z.string().regex(/^\+[1-9]\d{7,14}$/).optional() }).strict(),
+    name: z.string().trim().min(1).max(200).optional(), callbackNumber: z.string().regex(/^\+[1-9]\d{7,14}$/).optional(), clearCallbackNumber: z.literal(true).optional() }).strict(),
   z.object({ type: z.literal("request.claim"), requestId: id }).strict(),
   z.object({ type: z.literal("request.complete"), requestId: id, outcome: text }).strict(),
   z.object({ type: z.literal("request.resolve_ai"), requestId: id, requestRevision: revision,
@@ -219,9 +266,29 @@ export const commandSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("voice.recover"), recoveryId: id, fromEpoch: revision, parentCallId: id, childCallId: id,
     failureDomain: recoveryFailureDomainSchema.optional() }).strict(),
   z.object({ type: z.literal("voice.recovery_state"), recoveryId: id, state: z.enum(["redirecting", "attached", "outcome_unknown"]), attachmentId: id.optional() }).strict(),
+  z.object({ type: z.literal("voice.recovery_document_issue"), recoveryId: id }).strict(),
   z.object({ type: z.literal("voice.scripted_no_input"), recoveryId: id, expectedAttempts: z.number().int().min(0).max(2) }).strict(),
   z.object({ type: z.literal("voice.relay_end"), recoveryId: id, sourceEventId: id, semanticIntent: z.enum(["explicit_exit", "final_decline"]).optional(), invitationCompleted: z.boolean().optional() }).strict(),
   z.object({ type: z.literal("voice.late_evidence"), recoveryId: id, providerEventId: id, observedState: z.enum(["attached", "failed", "disconnected"]) }).strict(),
+  z.object({ type: z.literal("voice.message_continue"), continuationId: id, fromAttachmentId: id,
+    sourceEventId: id, mode: z.enum(["inline", "fresh"]), reason: z.enum(["closed_hours", "route_unavailable", "clarification_exhausted"]).optional(),
+    streamId: twilioStreamId.optional(), transferId: id.optional(),
+    capabilityDigest: sha256.optional(), expiresAt: z.string().datetime({ offset: true }).optional() }).strict(),
+  z.object({ type: z.literal("voice.message_attach"), continuationId: id, streamId: twilioStreamId,
+    parentCallId: id, accountId: id, capabilityDigest: sha256, profileSha256: sha256 }).strict(),
+  z.object({ type: z.literal("voice.message_document_issue"), continuationId: id }).strict(),
+  z.object({ type: z.literal("voice.message_end"), continuationId: id, sourceEventId: id,
+    semanticIntent: z.enum(["explicit_exit", "final_decline"]), invitationCompleted: z.boolean() }).strict(),
+  z.object({ type: z.literal("voice.primary_media.issue"), attachmentId: id, parentCallId: id, accountId: id,
+    capabilityDigest: sha256, expiresAt: z.string().datetime({ offset: true }), profileSha256: sha256, configVersion: id }).strict(),
+  z.object({ type: z.literal("voice.primary_media.attach"), attachmentId: id, parentCallId: id, accountId: id,
+    streamId: twilioStreamId, capabilityDigest: sha256, profileSha256: sha256, configVersion: id }).strict(),
+  z.object({ type: z.literal("voice.primary_media.bind_session"), attachmentId: id, streamId: twilioStreamId,
+    modelSessionId: id, configFingerprint: sha256, inputPipelineArmed: z.literal(true) }).strict(),
+  z.object({ type: z.literal("voice.primary_media.opening"), attachmentId: id, streamId: twilioStreamId, modelSessionId: id,
+    presentationId: id, state: z.enum(["issued", "playing", "completed", "interrupted", "failed"]), markId: id.optional() }).strict(),
+  z.object({ type: z.literal("voice.primary_media.close"), attachmentId: id, streamId: twilioStreamId.optional(),
+    reason: z.enum(["carrier_transition", "carrier_terminal", "model_failure", "superseded"]) }).strict(),
   z.object({ type: z.literal("conversation.heartbeat"), voiceEpoch: revision, leaseUntil: z.string().datetime() }).strict(),
   z.object({ type: z.literal("conversation.disconnect") }).strict(),
 ]);
@@ -234,6 +301,17 @@ export const commandEnvelopeSchema = z.object({
   command: commandSchema,
 }).strict();
 export type CommandEnvelope = z.infer<typeof commandEnvelopeSchema>;
+/** Non-ending dialogue which may create an otherwise empty receptionist clarification draft. */
+export const EMPTY_RECEPTIONIST_CLARIFICATION_SCAFFOLD_DIALOGUE_KINDS = [
+  "clarify_request", "explain_purpose", "clarify_message", "repeat", "repair", "retry",
+] as const;
+export function isEmptyReceptionistClarificationScaffoldDialogue(proposal: CommandEnvelope["proposal"] | undefined): boolean {
+  return proposal?.tool === "propose_receptionist_dialogue"
+    && typeof proposal.arguments === "object" && proposal.arguments !== null
+    && "kind" in proposal.arguments
+    && typeof proposal.arguments.kind === "string"
+    && (EMPTY_RECEPTIONIST_CLARIFICATION_SCAFFOLD_DIALOGUE_KINDS as readonly string[]).includes(proposal.arguments.kind);
+}
 export type ConversationEvent = { id: string; conversationId: string; revision: number; actor: CommandEnvelope["actor"]; command: ConversationCommand; occurredAt: string };
 export class ConversationConflict extends Error {
   constructor(public readonly code: string) { super(code); this.name = "ConversationConflict"; }
@@ -245,13 +323,27 @@ function requireCondition(ok: unknown, code: string): asserts ok {
 export function newConversation(admission: Admission, conversationId: string, now: string): Conversation {
   return conversationSchema.parse({ schemaVersion: 1, id: conversationId, admission: admissionSchema.parse(admission),
     revision: 0, ownerEpoch: 0, voiceEpoch: 0, owner: "ai", staffActor: null, phase: "active", activityLeaseUntil: null,
-    providerTier: "realtime", suppressed: false, suppressionRevision: 0, lastInboundAt: null, unsupportedMediaCount: 0, unsupportedNonTextCount: 0, emergency: null, pendingQuestion: null, questionIds: [], inputs: [], requests: [], messages: [], recoveries: [], createdAt: now, updatedAt: now });
+    providerTier: "realtime", suppressed: false, suppressionRevision: 0, lastInboundAt: null, unsupportedMediaCount: 0, unsupportedNonTextCount: 0, emergency: null, pendingQuestion: null, questionIds: [], inputs: [], requests: [], messages: [], recoveries: [], primaryMedia: null, createdAt: now, updatedAt: now });
 }
 
 export const unsupportedMediaNotice = "This demo supports text messages only. Please type how I can help.";
 export function unsupportedMediaNoticeId(sourceId: string): string { return `media-notice-${sourceId}`; }
 
 // Actor and scope come from authenticated transport/session context, never model arguments.
+/** Current draft information is source-bound, not restricted to a contact-question kind. */
+function currentReceptionistAtomSource(current: Conversation, request: Conversation["requests"][number] | undefined,
+  source: Conversation["inputs"][number] | undefined): boolean {
+  if (current.admission.mode !== "receptionist" || current.admission.channel !== "voice"
+    || current.phase !== "active" || current.owner !== "ai" || current.suppressed || current.emergency !== null
+    || request?.state !== "draft" || request.callbackConfirmed || source === undefined
+    || source.id !== current.inputs.at(-1)?.id || source.sequence < request.proposalRevision
+    || current.requests.filter(item => item.state === "draft" && item.fullProposal === undefined).length !== 1) return false;
+  const question = current.pendingQuestion;
+  return question === null ? source.questionId === undefined
+    : question.requestId === request.id && question.requestRevision === request.revision
+      && source.questionId === question.id && source.sequence > question.activatedRevision;
+}
+
 export function applyConversationCommand(current: Conversation, raw: CommandEnvelope, now: string): Conversation {
   const input = commandEnvelopeSchema.parse(raw);
   const { command: cmd, actor } = input;
@@ -262,11 +354,23 @@ export function applyConversationCommand(current: Conversation, raw: CommandEnve
   const isSystem = actor.kind === "system";
   const isProvider = actor.kind === "provider";
   const isStaff = actor.kind === "staff";
+  if ("clearCallbackNumber" in cmd && cmd.clearCallbackNumber === true) {
+    requireCondition(cmd.callbackNumber === undefined, "callback_number_clear_conflicts_with_set");
+    const request = current.requests.find(item => item.id === cmd.requestId);
+    const source = current.inputs.find(item => item.id === cmd.sourceEventId);
+    const question = current.pendingQuestion;
+    requireCondition(current.admission.mode === "receptionist" && current.admission.channel === "voice"
+      && request !== undefined && source !== undefined && source.id === current.inputs.at(-1)?.id && question !== null
+      && question.requestId === request.id && question.requestRevision === request.revision
+      && ["message", "name", "callback_number_entry", "callback_number"].includes(question.kind)
+      && source.questionId === question.id && source.sequence > question.activatedRevision,
+    "callback_number_invalidation_unavailable");
+  }
   if (actor.kind === "ai") {
     requireCondition(current.owner === "ai" && current.phase === "active" && !current.suppressed, "ai_not_owner");
-    requireCondition(["request.draft", "request.capture", "request.capture_callback_message", "request.supplement", "request.correct_contact", "sms.queue", "emergency.assess"].includes(cmd.type), "ai_command_denied");
+    requireCondition(["request.draft", "request.capture", "request.capture_callback_message", "request.begin_callback_message_replacement", "request.supplement", "request.correct_contact", "sms.queue", "emergency.assess"].includes(cmd.type), "ai_command_denied");
   }
-  if (current.emergency !== null && ["question.activate", "clarification.ask", "transfer.start", "request.draft", "request.capture", "request.capture_callback_message", "request.supplement", "request.correct_contact", "request.confirm_callback", "request.confirm_and_capture_callback", "sms.queue"].includes(cmd.type)) requireCondition(false, "emergency_active");
+  if (current.emergency !== null && ["question.activate", "clarification.ask", "public_faq.choice_ask", "public_faq.choice_answer", "transfer.start", "request.draft", "request.capture", "request.capture_callback_message", "request.supplement", "request.correct_contact", "request.confirm_callback", "request.confirm_and_capture_callback", "sms.queue"].includes(cmd.type)) requireCondition(false, "emergency_active");
   if (cmd.type === "evaluation.schedule") {
     requireCondition(isSystem && current.phase !== "active" && current.admission.channel === "voice", "evaluation_schedule_unavailable");
     const id = evaluationId(scopeOf(current), cmd.version);
@@ -326,12 +430,25 @@ export function applyConversationCommand(current: Conversation, raw: CommandEnve
       && Date.parse(a.issuedAt) <= Date.parse(now) && Date.parse(a.deadlineAt) > Date.parse(now), "controlled_transfer_binding_invalid");
     const request = current.requests.find((item) => item.id === a.requestId);
     requireCondition(request?.state === "draft" && request.revision === a.requestRevision && request.category === a.category, "controlled_transfer_request_invalid");
-    requireCondition(!current.controlledTransfers.some((item) => item.outcome === null || item.attempt.id === a.id)
+    requireCondition(!current.controlledTransfers.some((item) => item.outcome === null && item.dispatch !== "aborted" || item.attempt.id === a.id)
       && !current.transfers.some((item) => item.state === "trying") && current.controlledTransfers.length < 8, "controlled_transfer_busy");
     next.controlledTransfers.push({ attempt: a, dispatch: "prepared", outcome: null, acceptance: null, resumedVoiceEpoch: null });
     next.voiceEpoch += 1;
     next.activityLeaseUntil = null;
     next.pendingQuestion = null;
+  } else if (cmd.type === "controlled_transfer.abort") {
+    requireCondition(isSystem && current.admission.mode === "receptionist" && current.admission.channel === "voice"
+      && current.admission.voicePlayback === "primary_media" && current.phase === "active" && current.owner === "ai"
+      && !current.suppressed && current.emergency === null, "controlled_transfer_abort_denied");
+    const record = next.controlledTransfers.find(item => item.attempt.id === cmd.transferId);
+    const media = next.primaryMedia;
+    requireCondition(record !== undefined && record.outcome === null && ["prepared", "submitting"].includes(record.dispatch)
+      && record.attempt.ownerEpoch === current.ownerEpoch && record.attempt.voiceEpoch === current.voiceEpoch
+      && media?.state === "model_bound" && media.ownerEpoch === current.ownerEpoch
+      && media.voiceEpoch + 1 === current.voiceEpoch && media.streamId !== null && media.modelSessionId !== null
+      && media.inputPipelineArmed, "controlled_transfer_abort_stale");
+    record!.dispatch = "aborted";
+    media!.voiceEpoch = current.voiceEpoch;
   } else if (cmd.type === "controlled_transfer.resume") {
     requireCondition(isSystem && current.admission.mode === "receptionist" && current.phase === "active" && current.owner === "ai"
       && current.emergency === null && !current.suppressed, "controlled_transfer_unavailable");
@@ -344,6 +461,14 @@ export function applyConversationCommand(current: Conversation, raw: CommandEnve
       requireCondition(active.attempt.voiceEpoch === current.voiceEpoch, "controlled_transfer_stale");
       const request = current.requests.find((item) => item.id === active.attempt.requestId);
       requireCondition(request?.state === "draft" && request.revision === active.attempt.requestRevision, "controlled_transfer_request_invalid");
+      const continuation = current.messageContinuation;
+      // An inline callback attachment is superseded when this transfer epoch
+      // starts. Retire only that prior attachment; live or fresh attachments
+      // remain authority boundaries and must reject the resume.
+      requireCondition(continuation === null || continuation.ownerEpoch === current.ownerEpoch
+        && continuation.mode === "inline" && continuation.state === "superseded"
+        && continuation.voiceEpoch < current.voiceEpoch, "controlled_transfer_resume_continuation_invalid");
+      next.messageContinuation = null;
       next.voiceEpoch += 1;
       next.providerTier = "realtime";
       next.activityLeaseUntil = null;
@@ -468,7 +593,8 @@ export function applyConversationCommand(current: Conversation, raw: CommandEnve
       }
     }
     const question = current.pendingQuestion;
-    if (current.admission.mode === "full" && current.phase === "active" && current.owner === "ai"
+    if ((current.admission.mode === "full" || current.admission.mode === "receptionist" && question?.kind === "request_clarification")
+      && current.phase === "active" && current.owner === "ai"
       && cmd.questionId !== undefined && question?.id === cmd.questionId && question.requestId !== null && question.requestRevision !== null) {
       const request = next.requests.find((item) => item.id === question.requestId);
       requireCondition(request?.state === "draft" && request.revision === question.requestRevision, "pending_question_request_invalid");
@@ -482,6 +608,41 @@ export function applyConversationCommand(current: Conversation, raw: CommandEnve
     requireCondition(isSystem && current.phase === "active" && current.owner === "ai", "system_active_required");
     requireCondition(current.clarificationCount === 0, "clarification_limit_reached");
     next.clarificationCount = 1;
+  } else if (cmd.type === "public_faq.choice_ask") {
+    const request = current.requests.find(item => item.id === cmd.requestId);
+    const faq = request?.receptionistPublicFaq;
+    const locationsReferenceCurrent = faq?.topic === "locations"
+      && faq.packId === cmd.reference.packId && faq.packVersion === cmd.reference.packVersion
+      && faq.factId === cmd.reference.factId && faq.factVersion === cmd.reference.factVersion
+      && faq.knowledgeSourceId === cmd.reference.knowledgeSourceId
+      && faq.knowledgeSourceVersion === cmd.reference.knowledgeSourceVersion
+      && faq.contentHash === cmd.reference.contentHash
+      && faq.ownerEpoch === current.ownerEpoch && faq.voiceEpoch === current.voiceEpoch;
+    const draftLocationsQuestion = request?.state === "draft" && locationsReferenceCurrent
+      && faq?.sourceId === cmd.sourceEventId && faq?.sourceRevision <= current.revision;
+    const savedLocationsQuestion = request?.state === "needs_callback" && request.confirmationSourceId === cmd.sourceEventId;
+    requireCondition(isSystem && current.admission.mode === "receptionist" && current.admission.channel === "voice"
+      && current.phase === "active" && current.owner === "ai" && !current.suppressed
+      && current.publicFaqChoice === null && current.clarificationCount === 0
+      && current.inputs.at(-1)?.id === cmd.sourceEventId && (draftLocationsQuestion || savedLocationsQuestion), "public_faq_choice_unavailable");
+    next.publicFaqChoice = { requestId: cmd.requestId, sourceId: cmd.sourceEventId, sourceRevision: current.revision,
+      ownerEpoch: current.ownerEpoch, voiceEpoch: current.voiceEpoch, questionTopic: "locations",
+      reference: cmd.reference, state: "asked" };
+    next.clarificationCount = 1;
+  } else if (cmd.type === "public_faq.choice_answer") {
+    const choice = current.publicFaqChoice;
+    const request = current.requests.find(item => item.id === cmd.requestId);
+    const source = current.inputs.at(-1);
+    const activeDraft = request?.state === "draft";
+    const savedCallback = request?.state === "needs_callback" && request.confirmationSourceId === choice?.sourceId;
+    requireCondition(isSystem && current.admission.mode === "receptionist" && current.admission.channel === "voice"
+      && current.phase === "active" && current.owner === "ai" && !current.suppressed
+      && choice?.state === "asked" && choice.requestId === cmd.requestId && choice.ownerEpoch === current.ownerEpoch
+      && choice.voiceEpoch === current.voiceEpoch && choice.sourceId !== cmd.sourceEventId
+      && source?.id === cmd.sourceEventId && source.sequence > choice.sourceRevision
+      && (activeDraft || savedCallback), "public_faq_choice_stale");
+    next.publicFaqChoice = { ...choice, state: "answered", answerSourceId: cmd.sourceEventId,
+      answerTopic: cmd.topic, answerReference: cmd.reference };
   } else if (cmd.type === "emergency.assess") {
     requireCondition(actor.kind === "ai" && current.phase === "active" && current.owner === "ai" && !current.suppressed, "emergency_assessment_denied");
     const source = next.inputs.at(-1);
@@ -514,12 +675,17 @@ export function applyConversationCommand(current: Conversation, raw: CommandEnve
     transfer.state = cmd.state;
   } else if (cmd.type === "question.activate") {
     requireCondition(isSystem && current.phase === "active", "system_active_required");
+    if (cmd.kind === "request_clarification" && current.admission.mode === "receptionist") {
+      requireCondition(current.clarificationCount === 0, "clarification_limit_reached");
+      next.clarificationCount = 1;
+    }
     requireCondition(!next.questionIds.includes(cmd.questionId), "question_id_reused");
     requireCondition(next.questionIds.length < 64, "conversation_capacity_reached");
     next.questionIds.push(cmd.questionId);
     const request = next.requests.find((r) => r.id === cmd.requestId);
     if (cmd.requestId !== undefined) requireCondition(request, "question_request_missing");
-    if (["patient_status", "identity_dob", "identity_zip", "slot_selection", "appointment_consent", "attendance_consent", "request_clarification"].includes(cmd.kind)) {
+    if (["patient_status", "identity_dob", "identity_zip", "slot_selection", "appointment_consent", "attendance_consent"].includes(cmd.kind)
+      || cmd.kind === "request_clarification" && current.admission.mode !== "receptionist") {
       requireCondition(current.admission.mode === "full", "full_capability_unavailable");
     }
     if (cmd.kind !== "general") requireCondition(request?.state === "draft", "question_request_incomplete");
@@ -573,10 +739,36 @@ export function applyConversationCommand(current: Conversation, raw: CommandEnve
     }
     next.requests.push({ id: cmd.callbackRequestId, revision: 0, category: null, originalRequest: source.originalRequest,
       name: source.name, callbackNumber: hasCapturedCallbackNumber ? source.callbackNumber : "", callbackConfirmed: source.callbackConfirmed,
+      ...(source.nameSourceId === undefined ? {} : { nameSourceId: source.nameSourceId }),
+      ...(hasCapturedCallbackNumber && source.callbackNumberSourceId !== undefined ? { callbackNumberSourceId: source.callbackNumberSourceId } : {}),
       confirmationSourceId: source.callbackConfirmed ? source.confirmationSourceId : null,
-      callbackMessageSourceId: hasSourceBackedMessage ? messageSourceId : null, owner: null, outcome: null,
+      callbackMessageSourceId: hasSourceBackedMessage ? messageSourceId : null,
+      ...(hasSourceBackedMessage && source.callbackMessageText !== undefined ? { callbackMessageText: source.callbackMessageText } : {}), owner: null, outcome: null,
       aiResolution: null, sourceIds: [...source.sourceIds], proposalRevision: current.revision + 1,
       degradedHandoff: { recoveryId: recovery.id, sourceRequestId: source.id, sourceRequestRevision: source.revision }, state: "draft" });
+  } else if (cmd.type === "request.begin_callback_message_replacement") {
+    requireCondition(actor.kind === "ai" && current.phase === "active" && current.owner === "ai" && !current.suppressed && current.emergency === null,
+      "callback_message_owner_denied");
+    const request = next.requests.find(item => item.id === cmd.requestId);
+    const source = next.inputs.find(item => item.id === cmd.sourceEventId);
+    requireCondition(current.admission.mode === "receptionist" && current.admission.channel === "voice" && request !== undefined && source !== undefined,
+      "callback_message_replacement_unavailable");
+    requireCondition(request.callbackMessageSourceId != null && currentReceptionistAtomSource(current, request, source),
+      "callback_message_question_mismatch");
+    if (!request.sourceIds.includes(source.id)) request.sourceIds.push(source.id);
+    if (cmd.name !== undefined) {
+      if (request.name !== cmd.name || request.nameSourceId === undefined) request.nameSourceId = source!.id;
+      request.name = cmd.name;
+    }
+    if (cmd.callbackNumber !== undefined) {
+      if (request.callbackNumber !== cmd.callbackNumber || request.callbackNumberSourceId === undefined) request.callbackNumberSourceId = source!.id;
+      request.callbackNumber = cmd.callbackNumber;
+    }
+    if (cmd.clearCallbackNumber === true) {
+      request.callbackNumber = ""; delete request.callbackNumberSourceId; request.callbackConfirmed = false; request.confirmationSourceId = null;
+    }
+    request.callbackMessageSourceId = null; delete request.callbackMessageText; request.callbackConfirmed = false; request.confirmationSourceId = null;
+    request.proposalRevision = current.revision + 1; request.revision += 1; next.pendingQuestion = null;
   } else if (cmd.type === "request.capture_callback_message") {
     requireCondition(actor.kind === "ai" && current.phase === "active" && current.owner === "ai" && !current.suppressed && current.emergency === null,
       "callback_message_owner_denied");
@@ -584,27 +776,66 @@ export function applyConversationCommand(current: Conversation, raw: CommandEnve
     const source = next.inputs.find((item) => item.id === cmd.sourceEventId);
     const question = next.pendingQuestion;
     if (request === undefined) throw new ConversationConflict("request_not_editable");
-    if (source === undefined || question === null) throw new ConversationConflict("callback_message_question_mismatch");
+    if (source === undefined) throw new ConversationConflict("callback_message_question_mismatch");
     requireCondition(request.state === "draft", "request_not_editable");
+    requireCondition(cmd.message === undefined || current.admission.mode === "receptionist" && current.admission.channel === "voice", "callback_message_value_unavailable");
     requireCondition(!current.requests.some((item) => item.degradedHandoff?.sourceRequestId === request.id), "degraded_handoff_source_immutable");
     const correctingMessage = current.admission.mode === "receptionist" && current.admission.channel === "voice"
-      && request.callbackMessageSourceId != null && ["name", "callback_number_entry", "callback_number"].includes(question.kind);
-    requireCondition(source?.id === current.inputs.at(-1)?.id && (question.kind === "message" || correctingMessage) && question.id === source.questionId
+      && request.callbackMessageSourceId != null && question !== null && ["name", "callback_number_entry", "callback_number"].includes(question.kind);
+    // A caller can volunteer a message while the native route is still settling.
+    // The current, unbound source may populate the draft before any callback question exists.
+    const messageSource = cmd.messageSourceEventId === undefined ? source : current.inputs.find((item) => item.id === cmd.messageSourceEventId);
+    const soleDraft = current.requests.filter((item) => item.state === "draft" && item.fullProposal === undefined);
+    const preQuestionMessage = current.admission.mode === "receptionist" && current.admission.channel === "voice"
+      && question === null && request.callbackMessageSourceId === null && soleDraft.length === 1 && soleDraft[0]?.id === request.id
+      && source.id === current.inputs.at(-1)?.id && source.questionId === undefined && source.sequence > request.proposalRevision
+      && messageSource !== undefined && messageSource.questionId === undefined && messageSource.sequence > request.proposalRevision
+      && messageSource.sequence <= source.sequence && !current.requests.some((item) => item.id !== request.id && item.sourceIds.includes(messageSource!.id));
+    const bootstrapOriginalSource = current.admission.mode === "receptionist" && current.admission.channel === "voice"
+      && question?.kind === "message" && question.requestId === request.id && question.requestRevision === request.revision
+      && request.state === "draft" && request.callbackMessageSourceId === null && source?.id === request.sourceIds[0] && source?.id === current.inputs.at(-1)?.id
+      && source.questionId === undefined && request.sourceIds.includes(source.id) && source.body === request.originalRequest;
+    // A split message can be supplied in an earlier turn of the same active
+    // message question while the latest turn supplies only contact details.
+    const sameQuestionMessage = current.admission.mode === "receptionist" && current.admission.channel === "voice"
+      && question !== null && (question.kind === "message" && request.callbackMessageSourceId === null || correctingMessage)
+      && question.requestId === request.id && question.requestRevision === request.revision
+      && soleDraft.length === 1 && soleDraft[0]?.id === request.id
+      && source.id === current.inputs.at(-1)?.id && source.questionId === question.id
+      && messageSource !== undefined && messageSource.questionId === question.id
+      && messageSource.sequence > question.activatedRevision && messageSource.sequence <= source.sequence
+      && !current.requests.some((item) => item.id !== request.id && item.sourceIds.includes(messageSource!.id));
+    requireCondition(cmd.messageSourceEventId === undefined || preQuestionMessage || sameQuestionMessage
+      || bootstrapOriginalSource && messageSource?.id === source.id, "callback_message_source_mismatch");
+    requireCondition(preQuestionMessage || bootstrapOriginalSource || source?.id === current.inputs.at(-1)?.id && question !== null && (question.kind === "message" || correctingMessage) && question.id === source.questionId
       && question.requestId === request.id && question.requestRevision === request.revision && source.sequence > question.activatedRevision,
     "callback_message_question_mismatch");
-    requireCondition(request.callbackMessageSourceId !== source.id && source.sequence > request.proposalRevision, "callback_message_source_stale");
+    requireCondition(request.callbackMessageSourceId !== source.id && (bootstrapOriginalSource || source.sequence > request.proposalRevision), "callback_message_source_stale");
     if (!request.sourceIds.includes(source.id)) {
       requireCondition(request.sourceIds.length < 32, "conversation_capacity_reached");
       request.sourceIds.push(source.id);
     }
-    if (cmd.name !== undefined) request.name = cmd.name;
+    if (cmd.name !== undefined) {
+      if (request.name !== cmd.name || request.nameSourceId === undefined) request.nameSourceId = source!.id;
+      request.name = cmd.name;
+    }
+    if (cmd.callbackNumber !== undefined && (request.callbackNumber !== cmd.callbackNumber || request.callbackNumberSourceId === undefined)) request.callbackNumberSourceId = source!.id;
     if (cmd.callbackNumber !== undefined && cmd.callbackNumber !== request.callbackNumber) {
       request.callbackNumber = cmd.callbackNumber;
       request.callbackConfirmed = false;
       request.confirmationSourceId = null;
     }
+    if (cmd.clearCallbackNumber === true) {
+      request.callbackNumber = ""; delete request.callbackNumberSourceId; request.callbackConfirmed = false; request.confirmationSourceId = null;
+    }
     if (correctingMessage) { request.callbackConfirmed = false; request.confirmationSourceId = null; }
-    request.callbackMessageSourceId = source.id;
+    request.callbackMessageSourceId = messageSource!.id;
+    if (messageSource!.id !== source.id && !request.sourceIds.includes(messageSource!.id)) {
+      requireCondition(request.sourceIds.length < 32, "conversation_capacity_reached");
+      request.sourceIds.push(messageSource!.id);
+    }
+    if (cmd.message === undefined) delete request.callbackMessageText;
+    else request.callbackMessageText = cmd.message;
     request.proposalRevision = current.revision + 1;
     request.revision += 1;
     // Consume the message challenge before the coordinator activates the next field.
@@ -660,6 +891,16 @@ export function applyConversationCommand(current: Conversation, raw: CommandEnve
     if (cmd.type === "request.draft") requireCondition(source, "request_source_missing");
     if (request === undefined) {
       requireCondition(cmd.type === "request.draft", "request_missing");
+      const emptyReceptionistClarificationScaffold = isSystem && current.admission.mode === "receptionist"
+        && current.admission.channel === "voice" && cmd.category === undefined && cmd.fullProposal === undefined
+        && cmd.callbackMessage === undefined && cmd.callbackMessageAction === undefined && cmd.name === undefined
+        && cmd.callbackNumber === undefined && cmd.clearCallbackNumber === undefined && cmd.originalRequest === undefined;
+      if (emptyReceptionistClarificationScaffold) {
+        const unclearIntentOrigin = input.proposal?.tool === "propose_receptionist_intent"
+          && input.proposal.arguments.requestMeaning === "unclear";
+        requireCondition(isEmptyReceptionistClarificationScaffoldDialogue(input.proposal) || unclearIntentOrigin,
+          "empty_receptionist_clarification_scaffold_origin");
+      }
       requireCondition(next.requests.length < 16, "conversation_capacity_reached");
       const sourceIds = cmd.sourceEventIds ?? [source!.id];
       const originalId = cmd.originalSourceEventId ?? source!.id;
@@ -671,15 +912,27 @@ export function applyConversationCommand(current: Conversation, raw: CommandEnve
       next.requests.push(request);
     }
     if (cmd.type === "request.draft") {
-      if (cmd.preserveMessageQuestion === true) requireCondition(isSystem && !creating && current.admission.mode === "receptionist" && current.admission.channel === "voice"
+      if (cmd.preserveMessageQuestion === true) requireCondition((isSystem || actor.kind === "ai" && ["propose_receptionist_intent", "propose_receptionist_public_faq", "propose_receptionist_capture"].includes(input.proposal?.tool ?? "")) && !creating && current.admission.mode === "receptionist" && current.admission.channel === "voice"
         && current.owner === "ai" && !current.suppressed && current.emergency === null && !request.callbackConfirmed
         && current.pendingQuestion?.kind === "message" && current.pendingQuestion.requestId === request.id
         && current.pendingQuestion.requestRevision === request.revision && source!.questionId === current.pendingQuestion.id
         && source!.id === current.inputs.at(-1)?.id && source!.sequence > current.pendingQuestion.activatedRevision
-        && (cmd.name !== undefined || cmd.callbackNumber !== undefined) && cmd.category === undefined && cmd.fullProposal === undefined
+        && (cmd.name !== undefined || cmd.callbackNumber !== undefined) && cmd.category === undefined && cmd.callbackMessage === undefined && cmd.fullProposal === undefined
         && cmd.originalRequest === undefined && cmd.originalSourceEventId === undefined && cmd.sourceEventIds === undefined
-        && cmd.receptionistPublicFaqTopic === undefined && cmd.receptionistPublicFaqReference === undefined, "contact_projection_unavailable");
+        && (cmd.receptionistPublicFaqTopic === undefined || input.proposal?.tool === "propose_receptionist_public_faq"), "contact_projection_unavailable");
       if (cmd.fullProposal !== undefined) requireCondition(current.admission.mode === "full", "full_capability_unavailable");
+      if (cmd.callbackMessageAction !== undefined) requireCondition(cmd.callbackMessage !== undefined, "callback_message_action_without_message");
+      const initialAtomicMessage = creating && cmd.callbackMessageAction === "record" && actor.kind === "ai"
+        && input.proposal?.tool === "propose_receptionist_intent" && current.admission.mode === "receptionist" && current.admission.channel === "voice"
+        && current.owner === "ai" && !current.suppressed && current.emergency === null && request.callbackMessageSourceId === null
+        && source!.id === current.inputs.at(-1)?.id && source!.questionId === undefined && request.sourceIds.includes(source!.id);
+      const existingAtomicMessage = !creating && currentReceptionistAtomSource(current, request, source)
+        && cmd.callbackMessageAction === (request.callbackMessageSourceId === null ? "record" : "replace");
+      const messageProposalAllowed = ["propose_receptionist_intent", "propose_receptionist_public_faq"].includes(input.proposal?.tool ?? "")
+        || input.proposal?.tool === "propose_receptionist_capture" && input.proposal.arguments.messageClarity === "clear"
+          && cmd.category === undefined;
+      if (cmd.callbackMessage !== undefined) requireCondition(actor.kind === "ai" && messageProposalAllowed
+        && (initialAtomicMessage || existingAtomicMessage), "callback_message_question_mismatch");
       if (cmd.receptionistPublicFaqTopic !== undefined) requireCondition(current.admission.mode === "receptionist" && current.admission.channel === "voice" && cmd.fullProposal === undefined && cmd.receptionistPublicFaqReference !== undefined,
         "receptionist_public_faq_unavailable");
       if (!creating) requireCondition(cmd.originalSourceEventId === undefined && cmd.sourceEventIds === undefined, "request_source_bundle_existing");
@@ -691,17 +944,51 @@ export function applyConversationCommand(current: Conversation, raw: CommandEnve
       if (!request.sourceIds.includes(source!.id)) { requireCondition(request.sourceIds.length < 32, "conversation_capacity_reached"); request.sourceIds.push(source!.id); }
       if (cmd.preserveMessageQuestion !== true) request.proposalRevision = current.revision + 1;
       if (cmd.category !== undefined) request.category = cmd.category;
+      if (cmd.callbackMessage !== undefined) {
+        request.callbackMessageSourceId = source!.id;
+        request.callbackMessageText = cmd.callbackMessage;
+        request.callbackConfirmed = false;
+        request.confirmationSourceId = null;
+      }
       if (cmd.fullProposal !== undefined) request.fullProposal = cmd.fullProposal;
       if (cmd.receptionistPublicFaqTopic !== undefined) {
-        requireCondition(creating || request.receptionistPublicFaq?.topic === cmd.receptionistPublicFaqTopic, "receptionist_public_faq_immutable");
-        request.receptionistPublicFaq = { topic: cmd.receptionistPublicFaqTopic, sourceId: source!.id,
+        const choice = current.publicFaqChoice;
+        const answerReference = choice?.answerReference;
+        const selectedAnswer = choice?.answerTopic === undefined ? null : resolveReceptionistPublicFaq({ practiceId: current.admission.practiceId,
+          topic: choice.answerTopic, asOf: now });
+        const requestedAnswer = resolveReceptionistPublicFaq({ practiceId: current.admission.practiceId,
+          topic: cmd.receptionistPublicFaqTopic, asOf: now });
+        const selectedOfficeFollowUp = request.receptionistPublicFaq?.topic === "locations"
+          && choice?.state === "answered" && choice.requestId === request.id
+          && choice.ownerEpoch === current.ownerEpoch && choice.voiceEpoch === current.voiceEpoch
+          && choice.answerSourceId !== undefined && sameSelectedOfficePublicFaqTopic(choice.answerTopic, cmd.receptionistPublicFaqTopic)
+          && answerReference !== undefined && selectedAnswer !== null && receptionistPublicFaqReferenceMatches(answerReference, selectedAnswer)
+          && requestedAnswer !== null && receptionistPublicFaqReferenceMatches(cmd.receptionistPublicFaqReference!, requestedAnswer)
+          && current.pendingQuestion?.requestId === request.id && current.pendingQuestion.requestRevision === request.revision
+          && source!.id === current.inputs.at(-1)?.id && source!.questionId === current.pendingQuestion.id
+          && source!.sequence > current.pendingQuestion.activatedRevision;
+        requireCondition(request.receptionistPublicFaq === undefined || request.receptionistPublicFaq.topic === cmd.receptionistPublicFaqTopic
+          || selectedOfficeFollowUp, "receptionist_public_faq_immutable");
+        if (!selectedOfficeFollowUp) request.receptionistPublicFaq = { topic: cmd.receptionistPublicFaqTopic, sourceId: source!.id,
           sourceRevision: current.revision, ownerEpoch: current.ownerEpoch, voiceEpoch: current.voiceEpoch,
           ...cmd.receptionistPublicFaqReference! };
       }
       request.pausedCallbackSourceId = undefined;
-      if (cmd.name !== undefined) request.name = cmd.name;
+      if (cmd.name !== undefined) {
+        if (request.name !== cmd.name || request.nameSourceId === undefined) request.nameSourceId = source!.id;
+        request.name = cmd.name;
+      }
+      if (cmd.callbackNumber !== undefined && (request.callbackNumber !== cmd.callbackNumber || request.callbackNumberSourceId === undefined)) request.callbackNumberSourceId = source!.id;
       if (cmd.callbackNumber !== undefined && cmd.callbackNumber !== request.callbackNumber) {
         request.callbackNumber = cmd.callbackNumber; request.callbackConfirmed = false; request.confirmationSourceId = null;
+      }
+      if (cmd.clearCallbackNumber === true) {
+        requireCondition(current.admission.mode === "receptionist" && current.admission.channel === "voice"
+          && current.pendingQuestion?.requestId === request.id && current.pendingQuestion.requestRevision === request.revision
+          && ["message", "name", "callback_number_entry", "callback_number"].includes(current.pendingQuestion.kind)
+          && source!.id === current.inputs.at(-1)?.id && source!.questionId === current.pendingQuestion.id
+          && source!.sequence > current.pendingQuestion.activatedRevision, "callback_number_invalidation_unavailable");
+        request.callbackNumber = ""; delete request.callbackNumberSourceId; request.callbackConfirmed = false; request.confirmationSourceId = null;
       }
       request.state = "draft";
     } else {
@@ -742,12 +1029,25 @@ export function applyConversationCommand(current: Conversation, raw: CommandEnve
     }
     if (cmd.type === "request.correct_contact") {
       if (next.pendingQuestion?.requestId === request.id) next.pendingQuestion = null;
-      requireCondition(cmd.name !== undefined || cmd.callbackNumber !== undefined, "empty_contact_correction");
-      if (cmd.name !== undefined) request.name = cmd.name;
+      requireCondition(cmd.name !== undefined || cmd.callbackNumber !== undefined || cmd.clearCallbackNumber === true, "empty_contact_correction");
+      if (cmd.name !== undefined) {
+        if (request.name !== cmd.name || request.nameSourceId === undefined) request.nameSourceId = source!.id;
+        request.name = cmd.name;
+      }
+      if (cmd.callbackNumber !== undefined && (request.callbackNumber !== cmd.callbackNumber || request.callbackNumberSourceId === undefined)) request.callbackNumberSourceId = source!.id;
       if (cmd.callbackNumber !== undefined && cmd.callbackNumber !== request.callbackNumber) {
         request.callbackNumber = cmd.callbackNumber;
         request.callbackConfirmed = false; request.confirmationSourceId = null; request.state = "draft";
         request.proposalRevision = current.revision + 1;
+      }
+      if (cmd.clearCallbackNumber === true) {
+        requireCondition(current.admission.mode === "receptionist" && current.admission.channel === "voice"
+          && question?.requestId === request.id && question.requestRevision === request.revision
+          && ["message", "name", "callback_number_entry", "callback_number"].includes(question.kind)
+          && source!.id === current.inputs.at(-1)?.id && source!.questionId === question.id
+          && source!.sequence > question.activatedRevision, "callback_number_invalidation_unavailable");
+        request.callbackNumber = ""; delete request.callbackNumberSourceId; request.callbackConfirmed = false; request.confirmationSourceId = null;
+        request.state = "draft"; request.proposalRevision = current.revision + 1;
       }
     }
     request.revision += 1;
@@ -925,6 +1225,148 @@ export function applyConversationCommand(current: Conversation, raw: CommandEnve
       if (terminal) requireCondition(cmd.state === m.state || cmd.state === "accepted", "contradictory_terminal_receipt");
       else if (!(m.state === "accepted" && cmd.state === "unknown")) m.state = cmd.state;
     }
+  } else if (cmd.type === "voice.message_continue") {
+    requireCondition(isSystem && current.admission.channel === "voice" && current.admission.mode === "receptionist"
+      && current.admission.voicePlayback === "primary_media" && current.phase === "active" && current.owner === "ai"
+      && current.emergency === null && !current.suppressed && current.messageContinuation === null,
+      "message_continue_denied");
+    const media = current.primaryMedia;
+    const source = current.inputs.at(-1), draft = current.requests.filter(request => request.state === "draft" && request.fullProposal === undefined);
+    requireCondition(media?.attachmentId === cmd.fromAttachmentId && source?.id === cmd.sourceEventId && draft.length === 1
+      && !current.transfers.some(transfer => transfer.state === "trying"), "message_continue_source_invalid");
+    if (cmd.mode === "inline") {
+      requireCondition(cmd.transferId === undefined && cmd.capabilityDigest === undefined && cmd.expiresAt === undefined
+        && cmd.streamId === media.streamId && media.state === "model_bound" && media.inputPipelineArmed
+        && (cmd.reason === undefined || cmd.reason === "closed_hours" ? current.admission.hours === "demo_closed"
+          : cmd.reason === "route_unavailable" && current.admission.hours === "demo_open"
+            || cmd.reason === "clarification_exhausted")
+        && current.controlledTransfers.every(transfer => transfer.outcome !== null),
+        "message_continue_inline_invalid");
+      next.voiceEpoch += 1; next.providerTier = "relay"; next.activityLeaseUntil = null;
+    } else {
+      const transfer = current.controlledTransfers.find(item => item.attempt.id === cmd.transferId);
+      requireCondition(cmd.streamId === undefined && cmd.reason === undefined && cmd.transferId !== undefined && transfer?.outcome !== null
+        && transfer?.outcome !== "accepted" && transfer?.resumedVoiceEpoch === current.voiceEpoch
+        && media.state === "superseded" && cmd.capabilityDigest !== undefined && cmd.expiresAt !== undefined
+        && Date.parse(cmd.expiresAt) > Date.parse(now) && Date.parse(cmd.expiresAt) <= Date.parse(now) + 120_000,
+        "message_continue_fresh_invalid");
+    }
+    const continuationReason = cmd.mode === "inline" ? cmd.reason ?? "closed_hours" : (() => {
+      const outcome = current.controlledTransfers.find(item => item.attempt.id === cmd.transferId)?.outcome;
+      requireCondition(outcome !== null && outcome !== undefined && outcome !== "accepted", "message_continue_fresh_invalid");
+      return outcome;
+    })();
+    next.messageContinuation = { id: cmd.continuationId, mode: cmd.mode, reason: continuationReason,
+      state: cmd.mode === "inline" ? "attached" : "issued", fromAttachmentId: cmd.fromAttachmentId,
+      transferId: cmd.transferId ?? null, sourceEventId: cmd.sourceEventId, transitionEventId: input.eventId,
+      parentCallId: current.admission.externalId, accountId: current.admission.accountId,
+      ownerEpoch: current.ownerEpoch, voiceEpoch: next.voiceEpoch, configVersion: current.admission.configVersion,
+      profileSha256: media.profileSha256, streamId: cmd.mode === "inline" ? media.streamId : null,
+      capabilityDigest: cmd.capabilityDigest ?? null, expiresAt: cmd.expiresAt ?? null, documentIssuedAt: null,
+      attachedAt: cmd.mode === "inline" ? now : null, closedAt: null,
+      callerEndSourceId: null, callerEndEventId: null };
+  } else if (cmd.type === "voice.message_document_issue") {
+    const continuation = next.messageContinuation;
+    requireCondition(isSystem && continuation?.id === cmd.continuationId && continuation.mode === "fresh"
+      && continuation.state === "issued" && continuation.documentIssuedAt === null
+      && current.phase === "active" && current.owner === "ai" && !current.suppressed && current.emergency === null
+      && continuation.ownerEpoch === current.ownerEpoch && continuation.voiceEpoch === current.voiceEpoch,
+      "message_document_stale");
+    continuation.documentIssuedAt = now;
+  } else if (cmd.type === "voice.message_attach") {
+    const continuation = next.messageContinuation;
+    requireCondition(isProvider && actor.id === "twilio-primary-media" && continuation?.id === cmd.continuationId
+      && continuation.mode === "fresh" && continuation.state === "issued" && continuation.documentIssuedAt !== null
+      && current.phase === "active" && current.owner === "ai" && !current.suppressed && current.emergency === null
+      && continuation.ownerEpoch === current.ownerEpoch && continuation.voiceEpoch === current.voiceEpoch
+      && cmd.parentCallId === continuation.parentCallId && cmd.accountId === continuation.accountId
+      && cmd.capabilityDigest === continuation.capabilityDigest && cmd.profileSha256 === continuation.profileSha256
+      && cmd.streamId !== current.primaryMedia?.streamId
+      && continuation.expiresAt !== null && Date.parse(now) < Date.parse(continuation.expiresAt), "message_attach_stale");
+    continuation.streamId = cmd.streamId; continuation.state = "attached"; continuation.attachedAt = now;
+    next.providerTier = "relay";
+  } else if (cmd.type === "voice.message_end") {
+    const continuation = next.messageContinuation, source = current.inputs.at(-1);
+    requireCondition(isSystem && continuation?.id === cmd.continuationId && continuation.state === "attached"
+      && continuation.ownerEpoch === current.ownerEpoch && continuation.voiceEpoch === current.voiceEpoch
+      && current.phase === "active" && current.owner === "ai" && !current.suppressed && current.emergency === null
+      && source?.id === cmd.sourceEventId && (cmd.semanticIntent === "explicit_exit"
+        || cmd.invitationCompleted && !current.requests.some(request => request.state === "draft")), "message_end_stale");
+    continuation.callerEndSourceId = source.id; continuation.callerEndEventId = input.eventId;
+  } else if (cmd.type === "voice.primary_media.issue") {
+    requireCondition(isSystem && current.admission.channel === "voice" && current.admission.mode === "receptionist"
+      && current.admission.voicePlayback === "primary_media" && current.phase === "active" && current.owner === "ai"
+      && current.emergency === null && !current.suppressed, "primary_media_issue_denied");
+    requireCondition(cmd.parentCallId === current.admission.externalId && cmd.accountId === current.admission.accountId
+      && cmd.configVersion === current.admission.configVersion && cmd.profileSha256 === (current.admission.voiceRelease?.profileSha256 ?? current.admission.controlledHours?.candidate?.profileSha256),
+    "primary_media_binding_invalid");
+    requireCondition(current.primaryMedia === null || ["closed", "superseded"].includes(current.primaryMedia.state), "primary_media_already_issued");
+    requireCondition(current.primaryMedia?.attachmentId !== cmd.attachmentId, "primary_media_replay");
+    const expires = Date.parse(cmd.expiresAt), issued = Date.parse(now);
+    requireCondition(Number.isFinite(expires) && expires > issued && expires <= issued + 120_000, "primary_media_expiry_invalid");
+    next.primaryMedia = { attachmentId: cmd.attachmentId, purpose: "primary_media", parentCallId: cmd.parentCallId,
+      accountId: cmd.accountId, ownerEpoch: current.ownerEpoch, voiceEpoch: current.voiceEpoch,
+      configVersion: cmd.configVersion, profileSha256: cmd.profileSha256, capabilityDigest: cmd.capabilityDigest,
+      expiresAt: cmd.expiresAt, state: "issued", streamId: null, modelSessionId: null,
+      configFingerprint: null, inputPipelineArmed: false,
+      opening: current.primaryMedia?.opening ?? { state: "unissued", presentationId: null, markId: null },
+      issuedAt: now, attachedAt: null, closedAt: null };
+  } else if (cmd.type === "voice.primary_media.attach") {
+    requireCondition(isProvider && actor.id === "twilio-primary-media", "primary_media_attach_denied");
+    const media = next.primaryMedia;
+    requireCondition(media?.attachmentId === cmd.attachmentId && current.phase === "active" && current.owner === "ai"
+      && !current.suppressed && current.emergency === null && media.ownerEpoch === current.ownerEpoch
+      && media.voiceEpoch === current.voiceEpoch, "primary_media_stale");
+    requireCondition(cmd.parentCallId === current.admission.externalId && cmd.accountId === current.admission.accountId
+      && cmd.parentCallId === media.parentCallId && cmd.accountId === media.accountId
+      && cmd.configVersion === media.configVersion && cmd.profileSha256 === media.profileSha256
+      && current.admission.voicePlayback === "primary_media", "primary_media_binding_invalid");
+    requireCondition(Date.parse(now) < Date.parse(media.expiresAt), "primary_media_expired");
+    requireCondition(cmd.capabilityDigest === media.capabilityDigest, "primary_media_capability_invalid");
+    requireCondition(media.state === "issued" || (["attached", "model_bound"].includes(media.state) && media.streamId === cmd.streamId), "primary_media_replay");
+    if (media.state === "issued") {
+      media.streamId = cmd.streamId; media.state = "attached"; media.attachedAt = now;
+    }
+  } else if (cmd.type === "voice.primary_media.bind_session") {
+    requireCondition(isSystem, "primary_media_bind_denied");
+    const media = next.primaryMedia;
+    requireCondition(media?.attachmentId === cmd.attachmentId && media.streamId === cmd.streamId
+      && media.ownerEpoch === current.ownerEpoch && media.voiceEpoch === current.voiceEpoch
+      && current.phase === "active" && current.owner === "ai" && !current.suppressed
+      && current.emergency === null, "primary_media_stale");
+    requireCondition(/^sess_[A-Za-z0-9_-]{3,}$/.test(cmd.modelSessionId)
+      && cmd.modelSessionId !== media.parentCallId && cmd.modelSessionId !== media.streamId, "primary_media_model_session_invalid");
+    requireCondition(media.state === "attached" || media.state === "model_bound"
+      && media.modelSessionId === cmd.modelSessionId && media.configFingerprint === cmd.configFingerprint,
+    "primary_media_session_conflict");
+    media.modelSessionId = cmd.modelSessionId; media.configFingerprint = cmd.configFingerprint;
+    media.inputPipelineArmed = true; media.state = "model_bound";
+  } else if (cmd.type === "voice.primary_media.opening") {
+    const media = next.primaryMedia;
+    requireCondition(media?.attachmentId === cmd.attachmentId && media.streamId === cmd.streamId
+      && media.modelSessionId === cmd.modelSessionId && media.ownerEpoch === current.ownerEpoch
+      && media.voiceEpoch === current.voiceEpoch && media.state === "model_bound"
+      && media.inputPipelineArmed && current.phase === "active" && current.owner === "ai"
+      && !current.suppressed && current.emergency === null, "primary_media_opening_stale");
+    const opening = media.opening;
+    requireCondition(opening.presentationId === null || opening.presentationId === cmd.presentationId, "primary_media_opening_stale");
+    const allowed: Record<typeof opening.state, readonly string[]> = {
+      unissued: ["issued"], issued: ["playing", "interrupted", "failed"], playing: ["completed", "interrupted", "failed"],
+      completed: [], interrupted: [], failed: [],
+    };
+    requireCondition(allowed[opening.state].includes(cmd.state), "primary_media_opening_stale");
+    requireCondition(cmd.state === "completed" ? isProvider && actor.id === "twilio-primary-media" && cmd.markId !== undefined && cmd.markId === opening.markId
+      : cmd.state === "playing" ? isSystem && cmd.markId !== undefined
+      : isSystem, "primary_media_opening_actor_denied");
+    opening.state = cmd.state; opening.presentationId = cmd.presentationId;
+    if (cmd.state === "playing") opening.markId = cmd.markId!;
+  } else if (cmd.type === "voice.primary_media.close") {
+    requireCondition(isSystem || isProvider, "primary_media_close_denied");
+    const media = next.primaryMedia;
+    requireCondition(media?.attachmentId === cmd.attachmentId && (cmd.streamId === undefined || cmd.streamId === media.streamId), "primary_media_stale");
+    requireCondition(!["closed", "superseded"].includes(media.state) || media.closedAt !== null, "primary_media_stale");
+    media.state = cmd.reason === "superseded" ? "superseded" : "closed";
+    media.closedAt ??= now;
   } else if (cmd.type === "voice.recover") {
     requireCondition(isSystem || isProvider, "recovery_actor_denied");
     requireCondition(current.admission.channel === "voice" && current.phase === "active", "voice_not_active");
@@ -942,7 +1384,15 @@ export function applyConversationCommand(current: Conversation, raw: CommandEnve
         && !current.transfers.some((transfer) => transfer.state === "trying")
         && !current.controlledTransfers.some((transfer) => transfer.outcome === null), "callback_handoff_denied");
     }
-    const target = current.providerTier === "realtime" && (failureDomain === "realtime_transport_only" || failureDomain === "callback_intake") ? "relay" : "scripted";
+    const candidateMediaRetry = current.admission.voiceRelease !== undefined && current.admission.mode === "receptionist" && current.providerTier === "relay"
+      && failureDomain === "relay_transport" && current.recoveries.some((item) => item.failureDomain === "callback_intake" && item.state === "attached")
+      && !current.recoveries.some((item) => item.failureDomain === "relay_transport");
+    const candidateRetryExhausted = current.admission.voiceRelease !== undefined && current.admission.mode === "receptionist"
+      && current.providerTier === "relay" && failureDomain === "relay_transport" && current.recoveries.length === 2
+      && current.recoveries[0]?.failureDomain === "callback_intake" && current.recoveries[0].state === "attached"
+      && current.recoveries[1]?.failureDomain === "relay_transport" && current.recoveries[1].state === "attached";
+    requireCondition(current.recoveries.length < 2 || candidateRetryExhausted, "recovery_capacity_reached");
+    const target = current.providerTier === "realtime" && (failureDomain === "realtime_transport_only" || failureDomain === "callback_intake") || candidateMediaRetry ? "relay" : "scripted";
     next.voiceEpoch += 1; next.ownerEpoch += 1; next.pendingQuestion = null; next.activityLeaseUntil = null;
     next.recoveries.push({ id: cmd.recoveryId, fromEpoch: cmd.fromEpoch, target, failureDomain, state: "claimed", parentCallId: cmd.parentCallId, childCallId: cmd.childCallId, triggerEventId: input.eventId, attachmentId: null, scriptedEmptyAttempts: 0, createdAt: now, updatedAt: now });
   } else if (cmd.type === "voice.recovery_state") {
@@ -958,6 +1408,12 @@ export function applyConversationCommand(current: Conversation, raw: CommandEnve
     }
     recovery.state = cmd.state; recovery.updatedAt = now;
     if (cmd.state === "attached") next.providerTier = recovery.target;
+  } else if (cmd.type === "voice.recovery_document_issue") {
+    requireCondition(isSystem && current.phase === "active" && current.owner === "ai" && !current.suppressed, "recovery_document_authority_denied");
+    const recovery = next.recoveries.find((item) => item.id === cmd.recoveryId);
+    requireCondition(recovery?.state === "redirecting" && recovery.fromEpoch + 1 === current.voiceEpoch
+      && recovery.documentIssuedAt === undefined, "recovery_document_already_issued");
+    recovery.documentIssuedAt = now; recovery.updatedAt = now;
   } else if (cmd.type === "voice.scripted_no_input") {
     requireCondition(isProvider && current.phase === "active" && current.admission.channel === "voice" && current.owner === "ai"
       && current.providerTier === "scripted", "scripted_no_input_denied");
@@ -971,7 +1427,7 @@ export function applyConversationCommand(current: Conversation, raw: CommandEnve
       && current.admission.mode === "receptionist" && current.admission.channel === "voice" && current.providerTier === "relay", "relay_end_unavailable");
     const recovery = next.recoveries.find((item) => item.id === cmd.recoveryId);
     const source = current.inputs.at(-1);
-    requireCondition(recovery?.target === "relay" && recovery.failureDomain === "callback_intake" && recovery.state === "attached"
+    requireCondition(recovery?.target === "relay" && ["callback_intake", "relay_transport"].includes(recovery.failureDomain) && recovery.state === "attached"
       && recovery.fromEpoch + 1 === current.voiceEpoch && source?.id === cmd.sourceEventId, "relay_end_stale");
     const terminalDecline = current.pendingQuestion === null && !current.requests.some((request) => request.state === "draft")
       && current.requests.some((request) => request.state === "needs_callback") && isClearDecline(source.body);
@@ -996,6 +1452,23 @@ export function applyConversationCommand(current: Conversation, raw: CommandEnve
     const id = evaluationId(scopeOf(current));
     if (!next.evaluations.some((item) => item.id === id)) next.evaluations.push({ id, version: CONVERSATION_EVALUATION_VERSION, scope: scopeOf(current),
       createdFromRevision: current.revision + 1, state: "pending", verdict: null, reasons: [], checks: null, incompleteRequestCount: null });
+  }
+  // A prepared primary transfer temporarily owns the next voice epoch. Keep the
+  // authenticated live stream available for a known pre-dispatch abort, while
+  // activePrimary still fences decisions until that abort rebinds the epoch.
+  const primaryTransferInFlight = next.primaryMedia !== null && next.primaryMedia.state === "model_bound"
+    && next.ownerEpoch === next.primaryMedia.ownerEpoch && next.primaryMedia.voiceEpoch + 1 === next.voiceEpoch
+    && next.controlledTransfers.some(item => item.outcome === null && ["prepared", "submitting"].includes(item.dispatch)
+      && item.attempt.ownerEpoch === next.ownerEpoch && item.attempt.voiceEpoch === next.voiceEpoch);
+  if (next.primaryMedia !== null && !["closed", "superseded"].includes(next.primaryMedia.state)
+    && ((next.voiceEpoch !== next.primaryMedia.voiceEpoch && !primaryTransferInFlight)
+      || next.ownerEpoch !== next.primaryMedia.ownerEpoch || next.phase !== "active" || next.emergency !== null || next.suppressed)) {
+    next.primaryMedia.state = "superseded"; next.primaryMedia.closedAt = now;
+  }
+  if (next.messageContinuation !== null && next.messageContinuation.state !== "closed" && next.messageContinuation.state !== "superseded"
+    && (next.voiceEpoch !== next.messageContinuation.voiceEpoch || next.ownerEpoch !== next.messageContinuation.ownerEpoch
+      || next.phase !== "active" || next.emergency !== null || next.suppressed)) {
+    next.messageContinuation.state = "superseded"; next.messageContinuation.closedAt = now;
   }
   for (const transfer of next.transfers) {
     if (transfer.state !== "trying") continue;

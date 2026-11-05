@@ -39,7 +39,7 @@ export function createReceptionistHttpHandler(options: {
       const url = new URL(request.url ?? "/", "https://receptionist.internal");
       if (request.method === "GET" && (url.pathname === "/health" || url.pathname === "/healthz")) {
         const ready = await ports.ready();
-        return json(response, ready ? 200 : 503, { service: "vegas-receptionist", mode: "synthetic_only", ready, ...(ports.voiceRelease === undefined ? {} : { voiceRelease: ports.voiceRelease() }) });
+        return json(response, ready ? 200 : 503, { service: "synthetic-receptionist", mode: "synthetic_only", ready, ...(ports.voiceRelease === undefined ? {} : { voiceRelease: ports.voiceRelease() }) });
       }
       if (request.method === "GET" && url.pathname.startsWith("/voice/audio/") && ports.audioAsset) { if (await ports.audioAsset(request, response)) return; throw new IngressRejected(403, "voice_audio_asset_rejected"); }
       if (request.method === "GET" && url.pathname === "/") {

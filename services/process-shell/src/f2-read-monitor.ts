@@ -34,7 +34,7 @@ const authorityBase = {
 /** Protected values travel only on the server-side response binding, never in assessor input. */
 export const protectedReadSpeechAuthoritySchema = z.discriminatedUnion("readKind", [
   z.object({ ...authorityBase, readKind: z.literal("appointment_details"), value: appointmentValueSchema,
-    timeZone: z.literal("UTC") }).strict(),
+    timeZone: z.literal("America/Los_Angeles") }).strict(),
   z.object({ ...authorityBase, readKind: z.literal("referral_status"),
     value: z.object({ status: protectedText }).strict() }).strict(),
   z.object({ ...authorityBase, readKind: z.literal("billing_balance"),

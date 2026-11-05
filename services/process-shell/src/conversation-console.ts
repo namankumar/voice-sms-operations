@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { CommandEnvelope, Conversation, ConversationCommand } from "./conversation-contract.js";
 import type { SpeechReview } from "./conversation-monitor.js";
-import { requestSourceSummary, type TransitionReceipt } from "./conversation-store.js";
+import type { TransitionReceipt } from "./conversation-store.js";
 import type { CallerProvidedIdentity } from "./f2-synthetic-practice-store.js";
 import type { CallRecordingList } from "./twilio-call-recordings.js";
 import type { RecordingTranscriptView } from "./recording-transcript-store.js";
+import type { LiveConversationReviewEntry } from "./live-conversation-review-store.js";
 
 export type ConversationConsoleFilter = "total" | "active_now" | "needs_follow_up" | "connected_to_staff" | "resolved_by_human" | "resolved_by_ai";
 export type ConversationConsoleMetricCounts = Readonly<{
@@ -32,6 +33,7 @@ export type ConversationConsoleHistoryProjection = Readonly<{
   }>[];
 }>;
 export type ConversationTranscriptView = readonly RecordingTranscriptView[] | "disabled" | "unavailable";
+export type LiveConversationReviewView = readonly LiveConversationReviewEntry[] | "unavailable" | "not_retained";
 
 export type ConversationConsoleInput = {
   rows: readonly Conversation[];
@@ -48,6 +50,7 @@ export type ConversationConsoleInput = {
   callerProvidedIdentity?: CallerProvidedIdentity | null;
   recordings?: CallRecordingList | { state: "not_enabled" };
   transcripts?: ConversationTranscriptView;
+  liveReview?: LiveConversationReviewView;
 };
 
 type HistoryEntry = ConversationConsoleInput["history"][number];
@@ -110,7 +113,10 @@ function conversationTable(rows: readonly Conversation[], channel: "voice" | "sm
 function conversationRow(conversation: Conversation, channel: "voice" | "sms", page: number, selected: boolean, filter?: ConversationConsoleFilter): string {
   const request = latestRequest(conversation);
   const callerName = request?.name.trim() || "Name not captured";
-  const requestText = requestSourceSummary(conversation, request) ?? conversation.inputs.at(-1)?.body ?? "No request captured";
+  // The queue is staff work, not a reconstruction of caller input. In
+  // particular, older rows without a persisted callback message must not
+  // silently surface a concatenated source transcript as the request.
+  const requestText = savedRequestMessage(request) ?? "No saved caller message";
   const href = conversationHref(channel, conversation.id, page, filter);
   return `<a class="conversation-row${selected ? " selected" : ""}" data-conversation-id="${esc(conversation.id)}" role="row" href="${esc(href)}"${selected ? ' aria-current="page"' : ""}>
     <span class="status-cell" role="cell">${conversationStatus(conversation)}</span>
@@ -133,6 +139,7 @@ function controlledTransferBlock(conversation: Conversation): string {
   }
   const request = conversation.requests.find((item) => item.id === record.attempt.requestId);
   const status = record.outcome === "accepted" && record.acceptance !== null ? "Demo recipient accepted"
+    : record.dispatch === "aborted" ? "Interrupted before transfer"
     : record.dispatch === "unknown" ? "Transfer status unknown"
     : record.outcome === "no_answer" ? "No answer"
     : record.outcome === "busy" ? "Line busy"
@@ -163,6 +170,7 @@ function conversationPanel(conversation: Conversation, input: ConversationConsol
     ${identityDetailBlock(conversation, input.callerProvidedIdentity)}
     ${requestBlock(conversation, input)}
     ${controlledTransferBlock(conversation)}
+    ${conversation.admission.channel === "voice" ? liveCallReviewBlock(input.liveReview) : ""}
     ${conversation.admission.channel === "voice" ? recordedTranscriptBlock(input.transcripts) : ""}
     ${conversation.admission.channel === "sms" ? messageBlock(conversation, input, currentStaffOwner) : voiceBlock(conversation, input.recordings, input.history)}
     ${simulatedRouteBlock(conversation, input)}
@@ -271,7 +279,79 @@ function liveVoiceConversationBlock(conversation: Conversation, history: readonl
   const content = entries.length === 0 ? `<p class="muted">No timestamped live conversation evidence is retained.</p>` : `<ol class="live-conversation-list">${entries.map((entry) => `<li class="${entry.kind}"><div><strong>${entry.kind === "caller" ? "Caller input" : "Assistant generated speech"}</strong><time datetime="${esc(entry.occurredAt)}" title="${esc(entry.occurredAt)}">${esc(formatTime(entry.occurredAt))}</time></div><p>${esc(entry.text)}</p>${entry.kind === "assistant" ? "<span>Generated text is not proof that the caller heard it.</span>" : ""}</li>`).join("")}</ol>`;
   const untimed = conversation.inputs.filter((entry) => !timestampedCallerIds.has(entry.id));
   const missing = untimed.length === 0 ? "" : `<section class="untimed-caller-input"><span class="eyebrow">Caller input without retained event timestamp</span><p class="muted">Stored caller input is shown here because its matching history event is unavailable. Its position relative to other events is unknown.</p><ol class="input-list">${untimed.map((entry) => `<li><p>${esc(entry.body)}</p><span class="technical-id">${esc(entry.id)}</span></li>`).join("")}</ol></section>`;
-  return `<section class="panel-section"><span class="eyebrow">Live conversation evidence</span><h3>Persisted event order</h3><p class="muted">Caller input and generated assistant speech from retained live-runtime events. This is not heard-audio chronology or proof of playback.</p>${content}${missing}</section>`;
+  return `<section class="panel-section"><span class="eyebrow">Legacy runtime evidence</span><h3>Persisted event order</h3><p class="muted">Caller input and generated assistant speech from older retained runtime events. This is separate from Live call review, is not recorded audio, and is not proof of playback.</p>${content}${missing}</section>`;
+}
+
+function liveCallReviewBlock(review: ConversationConsoleInput["liveReview"]): string {
+  const section = (state: "available" | "unavailable" | "not_retained", content: string) => `<section class="panel-section live-call-review" data-live-call-review data-live-call-review-state="${state}"><span class="eyebrow">Live call review</span><h3>Persisted live-event timeline</h3><p class="muted">Not recorded audio. This timeline only shows encrypted live events saved for this selected call; it does not reconstruct missing caller or assistant text. Events are visible for up to 7 days; physical expiry cleanup runs opportunistically when an authenticated staff member opens a selected call.</p>${content}</section>`;
+  if (review === undefined || review === "not_retained") return section("not_retained", "<p>No retained Live call review is available for this call. Historical assistant text was not backfilled.</p>");
+  if (review === "unavailable") return section("unavailable", "<p>Live call review is temporarily unavailable. No timeline is shown.</p>");
+  if (review.length === 0) return section("not_retained", "<p>No retained Live call review events are available for this call. This view does not infer why.</p>");
+  return section("available", `<ol class="live-conversation-list">${displayLiveReviewEntries(review).map((display) => {
+    const { entry } = display;
+    const delivery = entry.delivery === undefined ? "" : `<span>${esc(liveDeliveryLabel(entry.delivery.state, entry.delivery.timingPrecision))}</span>`;
+    const carrierPlayback = entry.carrierPlayback === undefined ? "" : carrierPlaybackBlock(entry.carrierPlayback);
+    const actionEvidence = entry.actionEvidence === undefined ? "" : actionEvidenceBlock(entry.actionEvidence);
+    const detail = display.text === null ? "<p class=\"muted\">Event retained without displayable text.</p>" : `<p>${esc(display.text)}</p>`;
+    const time = display.firstOccurredAt === display.lastOccurredAt ? esc(formatTime(display.firstOccurredAt)) : `${esc(formatTime(display.firstOccurredAt))}–${esc(formatTime(display.lastOccurredAt))}`;
+    const title = display.firstOccurredAt === display.lastOccurredAt ? display.firstOccurredAt : `${display.firstOccurredAt} to ${display.lastOccurredAt}`;
+    const ordinals = display.ordinals.join(",");
+    return `<li class="${esc(entry.speaker)}" data-live-call-review-event="${esc(entry.eventId)}" data-live-call-review-ordinals="${esc(ordinals)}"><div><strong>${esc(liveEventLabel(entry.kind))}</strong><time datetime="${esc(display.firstOccurredAt)}" title="${esc(title)}">${time}</time></div>${detail}${delivery}${actionEvidence}${carrierPlayback}<span>${esc(liveReviewStateLabel(entry.reviewState))}</span></li>`;
+  }).join("")}</ol>`);
+}
+
+type DisplayLiveReviewEntry = { entry: LiveConversationReviewEntry; text: string | null; firstOccurredAt: string; lastOccurredAt: string; ordinals: number[] };
+
+function displayLiveReviewEntries(entries: readonly LiveConversationReviewEntry[]): readonly DisplayLiveReviewEntry[] {
+  const displayed: DisplayLiveReviewEntry[] = [];
+  for (const entry of entries) {
+    const prior = displayed.at(-1);
+    if (prior !== undefined && transcriptDelta(entry) && transcriptDelta(prior.entry)
+      && prior.entry.speaker === entry.speaker && prior.entry.stream.streamSid === entry.stream.streamSid) {
+      prior.text = `${prior.text ?? ""}${entry.text ?? ""}`;
+      prior.lastOccurredAt = entry.occurredAt;
+      prior.ordinals.push(entry.appendOrdinal);
+    } else displayed.push({ entry, text: entry.text, firstOccurredAt: entry.occurredAt, lastOccurredAt: entry.occurredAt, ordinals: [entry.appendOrdinal] });
+  }
+  return displayed;
+}
+
+function transcriptDelta(entry: LiveConversationReviewEntry): boolean {
+  return (entry.kind === "caller_transcript" || entry.kind === "assistant_transcript")
+    && (entry.payload.type === "session.input_transcript.delta" || entry.payload.type === "session.output_transcript.delta");
+}
+
+function liveEventLabel(kind: LiveConversationReviewEntry["kind"]): string {
+  const labels: Record<LiveConversationReviewEntry["kind"], string> = {
+    caller_transcript: "Caller", assistant_transcript: "Assistant", live_event: "Live event", save_receipt: "Save result", transfer: "Transfer", closing: "Closing", error: "Call error",
+  };
+  return labels[kind];
+}
+
+function liveDeliveryLabel(state: NonNullable<LiveConversationReviewEntry["delivery"]>["state"], precision: NonNullable<LiveConversationReviewEntry["delivery"]>["timingPrecision"]): string {
+  const stateLabel = { generated: "Generated", played: "Carrier playback marked", interrupted: "Interrupted", unknown: "Delivery unknown" }[state];
+  const precisionLabel = { exact: "exact timing", estimated: "estimated timing", unavailable: "timing unavailable" }[precision];
+  return `${stateLabel} · ${precisionLabel}`;
+}
+
+function carrierPlaybackBlock(playback: NonNullable<LiveConversationReviewEntry["carrierPlayback"]>): string {
+  const action = { media_sent: "Media sent", mark_queued: "Carrier mark queued", mark_ack: "Carrier mark acknowledged", clear_sent: "Carrier clear sent" }[playback.action];
+  const boundary = playback.byteBoundary;
+  return `<div class="live-carrier-playback" data-live-carrier-playback><span>Carrier transport receipt only; this does not establish handset hearing.</span><dl class="conversation-facts">${fact("Receipt type", playback.type)}${fact("Action", action)}${fact("Output bytes", String(boundary.totalOutputBytes))}${fact("Played-mark bytes", String(boundary.playedMarkBytes))}${fact("Cleared-through bytes", String(boundary.clearedThroughBytes))}${fact("Last non-silence byte end", boundary.lastNonFFByteEnd === null ? "Not retained" : String(boundary.lastNonFFByteEnd))}${fact("Carrier mark", playback.carrierMark.name ?? "None")}${fact("Carrier acknowledgement", playback.carrierMark.acknowledged ? "Acknowledged" : "Not acknowledged")}</dl></div>`;
+}
+
+function actionEvidenceBlock(evidence: NonNullable<LiveConversationReviewEntry["actionEvidence"]>): string {
+  const details = [
+    fact("Event type", evidence.type), evidence.name === undefined ? "" : fact("Action", evidence.name),
+    evidence.status === undefined ? "" : fact("Status", evidence.status), evidence.saved === undefined ? "" : fact("Saved", evidence.saved ? "Yes" : "No"),
+    evidence.requestId === undefined ? "" : fact("Request", evidence.requestId), evidence.transferId === undefined ? "" : fact("Transfer", evidence.transferId),
+    evidence.callId === undefined ? "" : fact("Call", evidence.callId), evidence.scope === undefined ? "" : fact("Scope", evidence.scope),
+  ].join("");
+  return `<dl class="conversation-facts live-action-evidence" data-live-action-evidence>${details}</dl>`;
+}
+
+function liveReviewStateLabel(state: LiveConversationReviewEntry["reviewState"]): string {
+  return { complete: "Evidence complete", incomplete: "Evidence incomplete", no_speech: "No speech retained", unavailable: "Evidence unavailable" }[state];
 }
 
 function recordedTranscriptBlock(rows: ConversationConsoleInput["transcripts"]): string {
@@ -326,42 +406,30 @@ function requestBlock(conversation: Conversation, input: ConversationConsoleInpu
     const sourceIdsValue: unknown = "sourceIds" in request ? request.sourceIds : undefined;
     const hasSourceIds = Array.isArray(sourceIdsValue);
     const sourceIds = hasSourceIds ? sourceIdsValue.filter((value: unknown): value is string => typeof value === "string") : [];
-    const callbackMessage = callbackMessageDetail(conversation, request, sourceIds);
-    const messageUpdates = callbackMessageUpdates(conversation, request, input.history)
-      .map((update) => fact("Message update", update.body)).join("");
+    const callbackMessage = callbackMessageDetail(request, sourceIds);
     const proposalRevision = "proposalRevision" in request && typeof request.proposalRevision === "number" ? String(request.proposalRevision) : "Not recorded";
     const proposal = fullMode && request.fullProposal !== undefined ? fullRequestProposalBlock(request.fullProposal) : "";
     const recoveryContext = degradedSource ? `<p class="muted" data-degraded-recovery-context>Original full proposal retained as context; callback work is listed separately.</p>` : "";
     const resolution = hasAiResolution(request) ? aiResolutionBlock(request.aiResolution)
       : request.state === "ai_resolved" ? `<div class="ai-resolution-proof missing" data-ai-resolution-proof-missing><span class="eyebrow">AI resolution proof</span><strong>Proof unavailable</strong><p>This request cannot be treated as resolved without its typed server proof.</p></div>` : "";
     const staffOutcome = request.state === "ai_resolved" ? "" : fact("Outcome", request.outcome ?? "Not completed");
-    const summary = requestSourceSummary(conversation, request);
-    return `<li data-request-id="${esc(request.id)}"><div class="section-row"><div><strong>${esc(degradedSource ? "Recovery context" : requestStateLabel(request, conversation.admission.mode))}</strong><span>${esc(request.category === null ? "Unclassified" : words(request.category))}</span></div>${action}</div><p>${summary === null ? '<span class="muted">No request text captured.</span>' : esc(summary)}</p>${proposal}${recoveryContext}${resolution}<dl class="conversation-facts">${fact("Request ID", request.id)}${fact("Caller name", request.name || "Not captured")}${fact("Callback number", request.callbackNumber ? formatPhone(request.callbackNumber) : "Not captured")}${fact("Number confirmed", request.callbackConfirmed ? "Yes" : "No")}${fact("Confirmation source", request.confirmationSourceId ?? "Not confirmed")}${fact("Caller message", callbackMessage.body)}${fact("Caller message source", callbackMessage.sourceId)}${messageUpdates}${hasSourceIds ? fact("Source inputs", sourceIds.length > 0 ? sourceIds.join(", ") : "None") : ""}${fact("Proposal revision", proposalRevision)}${fact("Owner", request.owner ?? "Unassigned")}${staffOutcome}${fact("Request revision", String(request.revision))}</dl></li>`;
+    const summary = savedRequestMessage(request);
+    return `<li data-request-id="${esc(request.id)}"><div class="section-row"><div><strong>${esc(degradedSource ? "Recovery context" : requestStateLabel(request, conversation.admission.mode))}</strong><span>${esc(request.category === null ? "Unclassified" : words(request.category))}</span></div>${action}</div><p>${summary === null ? '<span class="muted">No saved caller message.</span>' : esc(summary)}</p>${proposal}${recoveryContext}${resolution}<dl class="conversation-facts">${fact("Request ID", request.id)}${fact("Caller name", request.name || "Not captured")}${fact("Callback number", request.callbackNumber ? formatPhone(request.callbackNumber) : "Not captured")}${fact("Number confirmed", request.callbackConfirmed ? "Yes" : "No")}${fact("Confirmation source", request.confirmationSourceId ?? "Not confirmed")}${fact("Caller message", callbackMessage.body)}${fact("Caller message source", callbackMessage.sourceId)}${hasSourceIds ? fact("Source inputs", sourceIds.length > 0 ? sourceIds.join(", ") : "None") : ""}${fact("Proposal revision", proposalRevision)}${fact("Owner", request.owner ?? "Unassigned")}${staffOutcome}${fact("Request revision", String(request.revision))}</dl></li>`;
   }).join("")}</ol>`;
   return `<section class="panel-section"><span class="eyebrow">${fullMode ? "Request agenda" : "Callback work"}</span><h3>Requests</h3>${requests}</section>`;
 }
 
-function callbackMessageUpdates(conversation: Conversation, request: Conversation["requests"][number], history: ConversationConsoleInput["history"]): Conversation["inputs"] {
-  const original = conversation.inputs.find((entry) => entry.id === request.callbackMessageSourceId && request.sourceIds.includes(entry.id));
-  if (original === undefined) return [];
-  const acceptedSources = new Set(history.flatMap((entry) => {
-    const command = entry.input.command;
-    const scope = entry.input.scope;
-    return entry.receipt.accepted && command.type === "request.supplement" && command.requestId === request.id
-      && scope.conversationId === conversation.id && scope.practiceId === conversation.admission.practiceId
-      && scope.instanceId === conversation.admission.instanceId && request.sourceIds.includes(command.sourceEventId)
-      ? [command.sourceEventId] : [];
-  }));
-  return conversation.inputs.filter((entry) => acceptedSources.has(entry.id) && entry.sequence > original.sequence)
-    .sort((left, right) => left.sequence - right.sequence);
-}
-
-function callbackMessageDetail(conversation: Conversation, request: Conversation["requests"][number], sourceIds: readonly string[]): { body: string; sourceId: string } {
+function callbackMessageDetail(request: Conversation["requests"][number], sourceIds: readonly string[]): { body: string; sourceId: string } {
   const sourceId = "callbackMessageSourceId" in request && typeof request.callbackMessageSourceId === "string"
     ? request.callbackMessageSourceId : null;
   if (sourceId === null || !sourceIds.includes(sourceId)) return { body: "Not captured", sourceId: "Not captured" };
-  const input = conversation.inputs.find((entry) => entry.id === sourceId);
-  return input === undefined ? { body: "Not captured", sourceId: "Not captured" } : { body: input.body, sourceId };
+  const body = savedRequestMessage(request);
+  return body === null ? { body: "Not captured", sourceId: "Not captured" } : { body, sourceId };
+}
+
+function savedRequestMessage(request: Conversation["requests"][number] | undefined): string | null {
+  const value = request?.callbackMessageText;
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
 type FullRequestProposal = NonNullable<Conversation["requests"][number]["fullProposal"]>;
@@ -760,8 +828,11 @@ function commandLabel(command: ConversationCommand, conversation: Conversation):
     case "controlled_transfer.dispatch": return "Test recipient transfer dispatch updated";
     case "controlled_transfer.update": return "Test recipient call progress recorded";
     case "controlled_transfer.finish": return "Test recipient transfer outcome recorded";
+    case "controlled_transfer.abort": return "Interrupted transfer retired before carrier dispatch";
     case "controlled_transfer.resume": return "Caller returned to AI message capture";
     case "simulated_route.record": return `Simulated ${words(command.outcome.outcome)} route outcome recorded`;
+    case "public_faq.choice_ask": return "Office clarification requested";
+    case "public_faq.choice_answer": return "Office clarification answered";
     case "voice.read_presented": return "Verified answer audio sent";
     case "monitor.review": return "Generated speech reviewed";
     case "monitor.correction_claim": return "Speech correction claimed";
@@ -781,6 +852,7 @@ function commandLabel(command: ConversationCommand, conversation: Conversation):
     case "request.abandon": return "Pending appointment change withdrawn";
     case "request.abandon_callback": return "Callback request withdrawn for resumed scheduling";
     case "request.capture_callback_message": return "Caller callback message captured";
+    case "request.begin_callback_message_replacement": return "Caller is replacing callback message";
     case "request.confirm_callback": return "Callback number confirmed";
     case "request.confirm_and_capture_callback": return "Callback request confirmed and captured";
     case "request.capture": return "Callback request captured";
@@ -805,9 +877,19 @@ function commandLabel(command: ConversationCommand, conversation: Conversation):
       : `${transport} non-text message received`;
     case "voice.recover": return "Voice recovery claimed";
     case "voice.recovery_state": return "Voice recovery updated";
+    case "voice.recovery_document_issue": return "Voice recovery document issued";
     case "voice.scripted_no_input": return "Fallback listening retry";
     case "voice.relay_end": return "Caller requested the end of the voice call";
     case "voice.late_evidence": return "Late voice evidence recorded";
+    case "voice.message_continue": return "Normal message continuation started";
+    case "voice.message_document_issue": return "Normal message return document issued";
+    case "voice.message_attach": return "Normal message stream attached";
+    case "voice.message_end": return "Caller finished normal message continuation";
+    case "voice.primary_media.issue": return "Primary voice media issued";
+    case "voice.primary_media.attach": return "Primary voice stream attached";
+    case "voice.primary_media.bind_session": return "Primary voice model session bound";
+    case "voice.primary_media.opening": return "Primary opening playback updated";
+    case "voice.primary_media.close": return "Primary voice stream closed";
     case "conversation.heartbeat": return "Voice activity lease renewed";
     case "conversation.disconnect": return "Conversation disconnected";
   }
@@ -819,8 +901,11 @@ function commandDetail(command: ConversationCommand): string {
     case "controlled_transfer.dispatch": return words(command.state);
     case "controlled_transfer.update": return words(command.attempt.state);
     case "controlled_transfer.finish": return command.outcome === "accepted" ? "Recipient accepted; resolution not confirmed" : words(command.outcome);
+    case "controlled_transfer.abort": return "Caller interrupted before provider update; voice stream retained";
     case "controlled_transfer.resume": return "Original request retained";
     case "simulated_route.record": return `${words(command.outcome.category)} · simulated only · ${words(command.outcome.outcome)}`;
+    case "public_faq.choice_ask": return `${command.requestId} · ${command.sourceEventId}`;
+    case "public_faq.choice_answer": return `${command.requestId} · ${command.sourceEventId} · ${words(command.topic)}`;
     case "voice.read_presented": return `${command.presentation.requestId} · Server playback finished; caller hearing unconfirmed`;
     case "request.resolve_ai": return `${command.requestId} · ${words(command.result.kind)}`;
     case "monitor.review": return `${command.review.id} · ${reviewVerdictLabel(command.review.verdict)} · ${correctionLabel(command.review.correction)}`;
@@ -844,6 +929,7 @@ function commandDetail(command: ConversationCommand): string {
     case "request.abandon_callback": return `${command.requestId} → ${command.resumeRequestId}`;
     case "request.abandon": return `${command.requestId} · ${command.sourceEventId}`;
     case "request.capture_callback_message": return `${command.requestId} · ${command.sourceEventId}`;
+    case "request.begin_callback_message_replacement": return [command.requestId, command.sourceEventId, command.name, command.callbackNumber].filter(Boolean).join(" · ");
     case "request.confirm_callback": return `${command.requestId} · ${command.callbackNumber}`;
     case "request.confirm_and_capture_callback": return `${command.requestId} · ${command.callbackNumber} · ${command.sourceEventId}`;
     case "request.capture": case "request.claim": return command.requestId;
@@ -864,9 +950,19 @@ function commandDetail(command: ConversationCommand): string {
     case "sms.unsupported_media": return "";
     case "voice.recover": return `${command.recoveryId} · ${command.parentCallId} → ${command.childCallId}`;
     case "voice.recovery_state": return `${command.recoveryId} · ${words(command.state)}${command.attachmentId ? ` · ${command.attachmentId}` : ""}`;
+    case "voice.recovery_document_issue": return command.recoveryId;
     case "voice.scripted_no_input": return `${command.recoveryId} · attempt ${command.expectedAttempts + 1} of 3`;
     case "voice.relay_end": return `${command.recoveryId} · ${command.sourceEventId}`;
     case "voice.late_evidence": return `${command.recoveryId} · ${command.providerEventId} · ${words(command.observedState)}`;
+    case "voice.message_continue": return `${command.continuationId} · ${words(command.mode)}`;
+    case "voice.message_document_issue": return command.continuationId;
+    case "voice.message_attach": return `${command.continuationId} · ${command.streamId}`;
+    case "voice.message_end": return `${command.continuationId} · ${command.sourceEventId}`;
+    case "voice.primary_media.issue": return command.attachmentId;
+    case "voice.primary_media.attach": return `${command.attachmentId} · ${command.streamId}`;
+    case "voice.primary_media.bind_session": return `${command.attachmentId} · ${command.modelSessionId}`;
+    case "voice.primary_media.opening": return `${command.presentationId} · ${words(command.state)}`;
+    case "voice.primary_media.close": return `${command.attachmentId} · ${words(command.reason)}`;
     case "conversation.heartbeat": return `Voice epoch ${command.voiceEpoch} · lease until ${formatTime(command.leaseUntil)}`;
     case "conversation.disconnect": return "";
   }
@@ -938,13 +1034,13 @@ function formatPhone(value: string): string {
 function formatTime(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(date);
+  return new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(date);
 }
 
 function formatDate(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "short", day: "numeric", year: "numeric" }).format(date);
+  return new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", month: "short", day: "numeric", year: "numeric" }).format(date);
 }
 
 function esc(value: string): string {

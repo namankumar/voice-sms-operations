@@ -10,14 +10,17 @@
     "test": "vitest run",
     "typecheck": "tsc -b --pretty false && tsc -p tsconfig.scripts.json --pretty false",
     "benchmark:local-fixture": "tsx benchmarks/voice-receptionist/src/local-fixture-run.ts",
-    "benchmark:scorecard": "vitest run scripts/voice-receptionist-scorecard.test.ts"
+    "benchmark:scorecard": "vitest run scripts/voice-receptionist-scorecard.test.ts",
+    "dashboard:test": "vitest run services/process-shell/tests/conversation-console.test.ts services/process-shell/tests/conversation-staff.test.ts",
+    "dashboard:preview": "tsx scripts/preview-staff-dashboard.ts"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
     "@types/ws": "^8.18.1",
     "tsx": "^4.20.0",
     "typescript": "5.8.3",
-    "vitest": "^3.2.0"
+    "vitest": "^3.2.0",
+    "jsdom": "^26.1.0"
   },
   "dependencies": {
     "openai": "^7.23.0",

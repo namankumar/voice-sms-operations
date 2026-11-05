@@ -4,7 +4,7 @@ import { scopeOf, type CommandEnvelope, type Conversation, type ConversationScop
 import type { PublicKnowledgeSpeechAuthority, SpeechMonitor, SpeechReview, SpeechReviewInput } from "./conversation-monitor.js";
 import type { ConversationStore, TransitionReceipt } from "./conversation-store.js";
 import { protectedVoiceReadAnswer, protectedReadSpeechAuthoritySchema, voiceReadPresentationReceiptSchema, type ProtectedReadSpeechAuthority, type VoiceReadPresentationReceipt } from "./f2-read-monitor.js";
-import { approvedAppointmentDirections, querySyntheticPracticeKnowledge, vegasVascularKnowledgePack } from "./f2-knowledge.js";
+import { approvedAppointmentDirections, querySyntheticPracticeKnowledge, syntheticVascularKnowledgePack } from "./f2-knowledge.js";
 import { voiceProposalSpeechAuthoritySchema, type VoiceProposalSpeechAuthority } from "./f2-voice-consent.js";
 import { voiceProposalReadbackReceiptSchema, type VoiceProposalReadbackReceipt } from "./f2-synthetic-practice-contract.js";
 import { compileReceptionistPrompt, persistedCallbackDirective, receptionistAllowedFacts, receptionistAppInstanceSchema, resolveStubRoute, voiceAppInstanceSchema,
@@ -2324,7 +2324,7 @@ export class ReceptionistVoiceSession {
     if (responseId === null || outputItemId === null || transcript === null || this.closed || this.monitorFailed || this.monitorAdmissionClosed) return;
     const response = this.responseAuthorities.get(responseId);
     if (response?.token.inputItemId === "opening") {
-      this.trace({ event: "opening_transcript", responseId, openingNamePresent: /\bvegas vascular\b/i.test(transcript) });
+      this.trace({ event: "opening_transcript", responseId, openingNamePresent: /\bsynthetic vascular\b/i.test(transcript) });
     }
     if (monitor === undefined) return;
     const protectedReadCandidate = this.protectedReads.get(responseId);
@@ -2611,7 +2611,7 @@ export class ReceptionistVoiceSession {
     const state = await this.current();
     if (this.closeOffer !== offer || !this.currentToken(offer.token, offer.fence)) return false;
     const request = state?.requests.find((item) => item.id === offer.knowledgeRequestId);
-    const fact = vegasVascularKnowledgePack.facts.find((item) => item.factId === offer.knowledgeFactId);
+    const fact = syntheticVascularKnowledgePack.facts.find((item) => item.factId === offer.knowledgeFactId);
     const approved = state === null ? null : matchedPublicKnowledge(state, offer.token.inputItemId, offer.text);
     const sourceEventId = offer.token.inputItemId;
     if (state === null || state.ownerEpoch !== offer.ownerEpoch || request?.state !== "draft" || fact === undefined || approved?.factId !== fact.factId
@@ -2620,7 +2620,7 @@ export class ReceptionistVoiceSession {
       || request.receptionistPublicFaq !== undefined && (request.receptionistPublicFaq.sourceId !== sourceEventId
         || request.receptionistPublicFaq.ownerEpoch !== state.ownerEpoch || request.receptionistPublicFaq.voiceEpoch !== state.voiceEpoch)
       || request.receptionistPublicFaq !== undefined && (request.receptionistPublicFaq.factId !== fact.factId
-        || request.receptionistPublicFaq.packId !== vegasVascularKnowledgePack.packId || request.receptionistPublicFaq.packVersion !== vegasVascularKnowledgePack.packVersion
+        || request.receptionistPublicFaq.packId !== syntheticVascularKnowledgePack.packId || request.receptionistPublicFaq.packVersion !== syntheticVascularKnowledgePack.packVersion
         || request.receptionistPublicFaq.factVersion !== fact.version
         || request.receptionistPublicFaq.knowledgeSourceId !== `knowledge-source-${digest(fact.source.sourceId)}`
         || request.receptionistPublicFaq.knowledgeSourceVersion !== fact.source.sourceVersion
@@ -2639,7 +2639,7 @@ export class ReceptionistVoiceSession {
       actor: { kind: "system", id: "receptionist-voice-session" },
       command: { type: "request.resolve_ai", requestId: request.id, requestRevision: request.revision, sourceEventId,
         result: { kind: "knowledge", topic: (request.receptionistPublicFaq?.topic ?? request.fullProposal!.knowledgeTopic) as "address" | "demo_way_directions" | "sample_city_address" | "locations" | "parking" | "hours" | "other",
-          packId: vegasVascularKnowledgePack.packId, packVersion: vegasVascularKnowledgePack.packVersion,
+          packId: syntheticVascularKnowledgePack.packId, packVersion: syntheticVascularKnowledgePack.packVersion,
           factId: fact.factId, factVersion: fact.version,
           sourceId: `knowledge-source-${digest(fact.source.sourceId)}`, sourceVersion: fact.source.sourceVersion,
           contentHash: `sha256:${createHash("sha256").update(fact.answer).digest("hex")}` } },

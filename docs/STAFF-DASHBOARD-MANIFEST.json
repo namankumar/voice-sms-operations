@@ -1,0 +1,175 @@
+{
+  "schema": 1,
+  "files": [
+    {
+      "path": "services/process-shell/src/controlled-offer-expiry.ts",
+      "sha256": "bc52990f41b129e961a381ff029e18e979eaea6981819bdb1219b5ace28371c8",
+      "provenance": "original staff dashboard dependency slice; practice/staff labels and literal telephone values generalized"
+    },
+    {
+      "path": "services/process-shell/src/controlled-test-transfer.ts",
+      "sha256": "11d9e9952ef1161fb7ca4cd5939787cecede8a69b02b86b088514f8f5824c056",
+      "provenance": "original staff dashboard dependency slice; practice/staff labels and literal telephone values generalized"
+    },
+    {
+      "path": "services/process-shell/src/conversation-console-client.ts",
+      "sha256": "a96ea55fa4d7699c03cc910b7cb39921d8147e5c849a359b76974460e3339f4a",
+      "provenance": "original staff dashboard dependency slice; practice/staff labels and literal telephone values generalized"
+    },
+    {
+      "path": "services/process-shell/src/conversation-console.ts",
+      "sha256": "24594b49159ea6c907900d23e8744a0652db4651823048b8362237050bf4b202",
+      "provenance": "original staff dashboard dependency slice; practice/staff labels and literal telephone values generalized"
+    },
+    {
+      "path": "services/process-shell/src/conversation-contract.ts",
+      "sha256": "5bf7e934151fd8e6d0e32fad3b242c981a5226638a32531f98723e697c5883d3",
+      "provenance": "original staff dashboard dependency slice; practice/staff labels and literal telephone values generalized"
+    },
+    {
+      "path": "services/process-shell/src/conversation-evaluation.ts",
+      "sha256": "8673db91e9b40e4c4e6c5a91828df9c6a758f2ef4c5fea3492e27e3ac34e962a",
+      "provenance": "original staff dashboard dependency slice; practice/staff labels and literal telephone values generalized"
+    },
+    {
+      "path": "services/process-shell/src/conversation-jobs.ts",
+      "sha256": "6c143f3d3730c018779cad51e38b2779b48f48b32573e51174969142bbe99a0a",
+      "provenance": "original staff dashboard dependency slice; practice/staff labels and literal telephone values generalized"
+    },
+    {
+      "path": "services/process-shell/src/conversation-monitor.ts",
+      "sha256": "952079e69fe3b962025b979a8916f00544d5db5a6a0daa3a5bb73a1e9943dcc9",
+      "provenance": "original staff dashboard dependency slice; practice/staff labels and literal telephone values generalized"
+    },
+    {
+      "path": "services/process-shell/src/conversation-query.ts",
+      "sha256": "b45ff83493a1a3eb607a163f778f6ba6e683673437201b9c238ca52b57acf908",
+      "provenance": "original staff dashboard dependency slice; practice/staff labels and literal telephone values generalized"
+    },
+    {
+      "path": "services/process-shell/src/conversation-staff.ts",
+      "sha256": "7752fe13ad382f02c990de49e8b48f321a987859aa3f62eecbae0581de246691",
+      "provenance": "original staff dashboard dependency slice; practice/staff labels and literal telephone values generalized"
+    },
+    {
+      "path": "services/process-shell/src/conversation-store.ts",
+      "sha256": "c7875b3771881aa77f3cde5a1ca0e2f03c69080345ac7ec1b8a7ad725df36cff",
+      "provenance": "original staff dashboard dependency slice; practice/staff labels and literal telephone values generalized"
+    },
+    {
+      "path": "services/process-shell/src/f2-dialogue-evidence.ts",
+      "sha256": "daeb8263b987fb0ae89ae6c8fc5ad647d3c30191a090eb977ae04e367adb7b4c",
+      "provenance": "original staff dashboard dependency slice; practice/staff labels and literal telephone values generalized"
+    },
+    {
+      "path": "services/process-shell/src/f2-knowledge.ts",
+      "sha256": "bbf0c1b59a7c6f5fdf3eb0c580f31d75c5ad199174c176ff4b6fb3ce109e3e7e",
+      "provenance": "Previously published reviewed synthetic practice facts, retaining original schema/query mechanics; no private office information."
+    },
+    {
+      "path": "services/process-shell/src/f2-read-monitor.ts",
+      "sha256": "d225bd5a67a2d36b28117bb84ae6e4727d093cfade72852dabd6f1925b05ee2d",
+      "provenance": "original staff dashboard dependency slice; practice/staff labels and literal telephone values generalized"
+    },
+    {
+      "path": "services/process-shell/src/f2-request-policy.ts",
+      "sha256": "8b9baf8bdb5bee97691b99b1d91239aa39223ed116549ad7dc783a946f6f5086",
+      "provenance": "original staff dashboard dependency slice; practice/staff labels and literal telephone values generalized"
+    },
+    {
+      "path": "services/process-shell/src/f2-scheduling-preference.ts",
+      "sha256": "a2bd2da1662268185caa6f077773ed3365615dcbdbcd99bd7ce5f53a0e48d38e",
+      "provenance": "original staff dashboard dependency slice; practice/staff labels and literal telephone values generalized"
+    },
+    {
+      "path": "services/process-shell/src/f2-synthetic-practice-contract.ts",
+      "sha256": "d4741b0a91bd3338b706d3073a8ee0a1d4c660ae065b51d7ee5a4cdf44dcd7ab",
+      "provenance": "original staff dashboard dependency slice; practice/staff labels and literal telephone values generalized"
+    },
+    {
+      "path": "services/process-shell/src/f2-synthetic-practice-store.ts",
+      "sha256": "a4079bbac9c851072c07ee4d4ba6385a0f7e3c610d7348c79f61de54a6335734",
+      "provenance": "original staff dashboard dependency slice; practice/staff labels and literal telephone values generalized"
+    },
+    {
+      "path": "services/process-shell/src/live-conversation-review-store.ts",
+      "sha256": "5ca4b20a56ad4ec9e6423c80c7af433cdfc2db78d5b077259b9f2e4535d03ede",
+      "provenance": "original staff dashboard dependency slice; practice/staff labels and literal telephone values generalized"
+    },
+    {
+      "path": "services/process-shell/src/mock-practice-system.ts",
+      "sha256": "5a7ff5f409ded6a9ff462ff29b746a2418a709926d38316eceee0b1ae239a693",
+      "provenance": "original staff dashboard dependency slice; practice/staff labels and literal telephone values generalized"
+    },
+    {
+      "path": "services/process-shell/src/receptionist-callback-dialogue.ts",
+      "sha256": "196e365442d8a41e6396363b5252d72638ccd60291d308d7c3c9a8a7b1abfbad",
+      "provenance": "original staff dashboard dependency slice; practice/staff labels and literal telephone values generalized"
+    },
+    {
+      "path": "services/process-shell/src/receptionist-callback-number.ts",
+      "sha256": "1c9213b4062f1a425979e7b20066e845ace95bb28ae034ad4e094a0a4112f262",
+      "provenance": "original staff dashboard dependency slice; practice/staff labels and literal telephone values generalized"
+    },
+    {
+      "path": "services/process-shell/src/receptionist-emergency-text.ts",
+      "sha256": "9a4823799e92e491619f533d985d20c9abc33fa780e94542f534776c27dfafb4",
+      "provenance": "original staff dashboard dependency slice; practice/staff labels and literal telephone values generalized"
+    },
+    {
+      "path": "services/process-shell/src/receptionist-policy.ts",
+      "sha256": "4f7c93def991fcdbbeed978a43340b8a9aa29c1b6b0b82eefa75d8e2987777e7",
+      "provenance": "original staff dashboard dependency slice; practice/staff labels and literal telephone values generalized"
+    },
+    {
+      "path": "services/process-shell/src/receptionist-public-faq.ts",
+      "sha256": "007d3d082ff7f024b1f2e972b32b60f2fcf4918878097dda7d21d150dc0b72b5",
+      "provenance": "original staff dashboard dependency slice; practice/staff labels and literal telephone values generalized"
+    },
+    {
+      "path": "services/process-shell/src/receptionist-voice-candidate.ts",
+      "sha256": "29629a3142a2ab109623efd6f30729dbf778c1c5848ab112b921c2181e6f75ac",
+      "provenance": "original staff dashboard dependency slice; practice/staff labels and literal telephone values generalized"
+    },
+    {
+      "path": "services/process-shell/src/recording-transcript-store.ts",
+      "sha256": "6d85235057d3f65d601697ef0288d12da763deeb7ad1b8979ac27655af45b564",
+      "provenance": "original staff dashboard dependency slice; practice/staff labels and literal telephone values generalized"
+    },
+    {
+      "path": "services/process-shell/src/recording-transcript.ts",
+      "sha256": "bf3aff856b6226832fcd85e41edfcd9247e2f90e65c3a193ccadd468473207e2",
+      "provenance": "original staff dashboard dependency slice; practice/staff labels and literal telephone values generalized"
+    },
+    {
+      "path": "services/process-shell/src/route-category.ts",
+      "sha256": "b32ee32ccfe28b38200f635f20aa1c1bdf22f78552e9fb1c32cce456b47448a2",
+      "provenance": "original staff dashboard dependency slice; practice/staff labels and literal telephone values generalized"
+    },
+    {
+      "path": "services/process-shell/src/staff-events.ts",
+      "sha256": "81588eba1e7edf87a17fe1714022f548f77dc1e7399aa28aeb0fa6b16b028edc",
+      "provenance": "original staff dashboard dependency slice; practice/staff labels and literal telephone values generalized"
+    },
+    {
+      "path": "services/process-shell/src/staff-extension.ts",
+      "sha256": "94835256fe2f58894c5dc3630b685fdc9e03dbb56631134e0c158a9bf1728e8a",
+      "provenance": "original staff dashboard dependency slice; practice/staff labels and literal telephone values generalized"
+    },
+    {
+      "path": "services/process-shell/src/twilio-call-recordings.ts",
+      "sha256": "8b4e7865c874a1c1056bc6cd46e7ef2061f28546f20619235e15b1aca7b2bb1b",
+      "provenance": "original staff dashboard dependency slice; practice/staff labels and literal telephone values generalized"
+    },
+    {
+      "path": "services/process-shell/tests/conversation-console.test.ts",
+      "sha256": "4545b85edc5a034a2f3704b78bcaf97acf8661fb366d77c9f7883d1993a4941f",
+      "provenance": "original staff dashboard dependency slice; practice/staff labels and literal telephone values generalized"
+    },
+    {
+      "path": "services/process-shell/tests/conversation-staff.test.ts",
+      "sha256": "d3f93738578af800e398c3c6b89d31976aba027bddcaad60051429d0d24988ae",
+      "provenance": "original staff dashboard dependency slice; practice/staff labels and literal telephone values generalized"
+    }
+  ]
+}

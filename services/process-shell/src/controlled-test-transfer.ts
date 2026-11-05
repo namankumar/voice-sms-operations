@@ -118,7 +118,7 @@ export class ControlledTestTransfer implements ControlledTestTransferPort {
     const recipient = this.map.recipients[category];
     if (recipient === undefined) return { kind: "fallback", reason: "unconfigured" };
     if (recipient.destination === this.map.sourceNumberE164) return { kind: "fallback", reason: "configured_self_loop" };
-    if (recipient.destination === callerNumberE164) return { kind: "fallback", reason: "caller_self_loop" };
+    if (recipient.destination === callerNumberE164 && !this.isApprovedDemoCallerDestination(recipient.destination)) return { kind: "fallback", reason: "caller_self_loop" };
 
     const deadlineAt = new Date(Date.parse(issuedAt) + (this.ringTimeoutSeconds + this.screeningTimeoutSeconds) * 1_000).toISOString();
     const attemptId = this.sign("attempt", [scope, requestId, requestRevision, ownerEpoch, voiceEpoch, category, parentCallId, this.map.version, recipient.id, recipient.consentEvidence.id, issuedAt]);
@@ -179,6 +179,10 @@ export class ControlledTestTransfer implements ControlledTestTransferPort {
     return `<Response>${announcement}<Dial timeout="${this.ringTimeoutSeconds}" answerOnBridge="true" action="${xml(action)}" method="POST"><Number url="${xml(screen)}" method="POST" statusCallback="${xml(status)}" statusCallbackMethod="POST" statusCallbackEvent="answered completed">${xml(attempt.destinationE164)}</Number></Dial></Response>`;
   }
 
+  // Human-approved exception for this configured Synthetic demo stand-in only.
+  private isApprovedDemoCallerDestination(destination: string): boolean {
+    return this.map.sourceNumberE164 === "+12025550101" && destination === "+12025550101";
+  }
   private callbackUrl(path: string, token: string): string { const url = new URL(path, this.callbackOrigin); url.searchParams.set("token", token); return url.toString(); }
   private requireAttempt(raw: ControlledTransferAttempt): ControlledTransferAttempt {
     const attempt = controlledTransferAttemptSchema.parse(raw);
@@ -186,7 +190,8 @@ export class ControlledTestTransfer implements ControlledTestTransferPort {
     if (attempt.configVersion !== this.map.version || recipient === undefined || attempt.recipientId !== recipient.id
       || attempt.destinationE164 !== recipient.destination || attempt.sourceSnapshot.configuredSourceE164 !== this.map.sourceNumberE164
       || JSON.stringify(attempt.recipientConsent) !== JSON.stringify(recipient.consentEvidence)
-      || attempt.destinationE164 === this.map.sourceNumberE164 || attempt.destinationE164 === attempt.sourceSnapshot.callerE164
+      || attempt.destinationE164 === this.map.sourceNumberE164
+      || (attempt.destinationE164 === attempt.sourceSnapshot.callerE164 && !this.isApprovedDemoCallerDestination(attempt.destinationE164))
       || Date.parse(attempt.deadlineAt) <= Date.parse(attempt.issuedAt) || !this.verifyToken(attempt.callbackToken, attempt)) throw new Error("controlled_transfer_attempt_invalid");
     return attempt;
   }

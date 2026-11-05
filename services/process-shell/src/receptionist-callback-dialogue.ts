@@ -1,15 +1,57 @@
 import type { Conversation } from "./conversation-contract.js";
 import { callbackNumberReadbackQuestion } from "./receptionist-callback-number.js";
 
+export function callbackHandoffIntro(state: Conversation): string {
+  if (state.admission.hours === "demo_closed" || state.messageContinuation?.reason === "closed_hours")
+    return "The office is closed right now.";
+  const request = [...state.requests].reverse().find(item => item.state === "draft");
+  const team = request?.category === "scheduling" ? "the scheduling team"
+    : request?.category === "referrals" ? "the referrals team"
+      : request?.category === "billing_or_insurance" ? "the billing and insurance team"
+        : request?.category === "clinical" ? "the clinical team"
+          : request?.category === "records_or_administrative" ? "the records and administration team"
+            : request?.category === "general_or_uncertain" ? "the front desk" : "the team";
+  const controlled = state.messageContinuation?.transferId
+    ? state.controlledTransfers.find(item => item.attempt.id === state.messageContinuation?.transferId) : undefined;
+  const outcome = controlled?.outcome ?? state.messageContinuation?.reason
+    ?? [...state.transfers].reverse().find(item => item.state !== "trying")?.state;
+  if (outcome === "busy" || outcome === "refused") return `The ${team.slice(4)} is busy right now.`;
+  if (outcome === "no_answer" || outcome === "route_unavailable") return `The ${team.slice(4)} isn't available right now.`;
+  if (["failed", "canceled", "late_accept"].includes(outcome ?? "")) return `I couldn't connect you with ${team}.`;
+  return "";
+}
+
 export const callbackNameQuestion = "Your name helps the team ask for you. What name should I put with your message?";
 
 export const callbackRecapRetryPrefaces = ["Let me read that back in one sentence: ", "To make sure the details are clear: ", "Please check this complete readback: "] as const;
 
+/** A prior, completed full recap may cover unchanged message/name; this reads only a corrected phone field. */
+export function callbackNumberOnlyQuestion(value: string): string {
+  return callbackNumberReadbackQuestion(value, null);
+}
+
+/** A completed review of unchanged message/number permits a focused corrected-name readback. */
+export function callbackNameOnlyQuestion(value: string): string {
+  return `I have your name as ${value}. Is that correct?`;
+}
+
+/** Read only fields whose current values still lack completed review coverage. */
+export function callbackFocusedReview(values: { message: string; name: string; callbackNumber: string }, fields: readonly ("message" | "name" | "callbackNumber")[], jointSave = fields.length === 3): string {
+  const parts: string[] = [];
+  if (fields.includes("message")) parts.push(`I have your message as: ${values.message.replace(/[.!?]+$/, "")}.`);
+  if (fields.includes("name")) parts.push(`I have your name as ${values.name}.`);
+  if (fields.includes("callbackNumber")) return parts.length
+    ? `Before I save it, ${parts.join(" ")} Callback number: plus ${values.callbackNumber.slice(1).split("").join(" ")}. ${jointSave ? "Are all these details correct, and may I save them for the team?" : "Are these details correct?"}`
+    : jointSave ? callbackNumberReadbackQuestion(values.callbackNumber, null).replace(/\?$/, ", and may I save these details for the team?")
+      : callbackNumberOnlyQuestion(values.callbackNumber);
+  return `${parts.join(" ")} ${jointSave ? "Is that correct, and may I save these details for the team?" : "Is that correct?"}`;
+}
+
 export function contextualCallbackQuestion(state: Conversation, request: Conversation["requests"][number], kind: "message" | "name" | "callback_number_entry" | "callback_number"): string {
-  if (kind === "message") return "I can take a message so the team can call you back. What would you like me to tell them?";
+  if (kind === "message") return "I can take a message for the team. What would you like me to tell them?";
   if (kind === "name") return callbackNameQuestion;
   if (kind === "callback_number_entry") return "What phone number should the team use to call you back about your message?";
-  const message = state.inputs.find((source) => source.id === request.callbackMessageSourceId)?.body.trim();
+  const message = request.callbackMessageText ?? state.inputs.find((source) => source.id === request.callbackMessageSourceId)?.body.trim();
   return (message ? `Before I save it, I have your message as: ${message.replace(/[.!?]+$/, "")}. ` : "Before I save your message, ")
     + callbackNumberReadbackQuestion(request.callbackNumber, request.name);
 }
@@ -51,7 +93,7 @@ export function receptionistDialogueText(kind: "explain_purpose" | "clarify_requ
     if (question.kind === "message") return attempts >= 2 ? "Let's keep the message simple. What would you like the team to call you about?"
         : "I didn't understand the message clearly. So I pass along the right words, could you say it again in your own words?";
     if (question.kind === "name") return attempts >= 2 ? "To get your name right for the callback, could you spell it for me?"
-        : "I didn't catch the name. What name should the team ask for when they call you back?";
+        : "To make sure the team can reach the right person, what name should I include with the message?";
     if (question.kind === "callback_number_entry") return attempts >= 2 ? "The team needs a complete phone number to return your call. Please say it in smaller groups, including the country code if you use one."
         : "I didn't catch the callback number clearly. Could you say the number again slowly, including a country code if needed?";
     if (question.kind === "callback_number" && currentQuestion) return `I haven't confirmed those details. ${currentQuestion}`;

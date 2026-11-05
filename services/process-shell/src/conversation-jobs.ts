@@ -112,7 +112,7 @@ export async function enqueueConversationJob(tx: postgres.TransactionSql, cipher
 export class PostgresConversationJobs {
   private readonly sql: ReturnType<typeof postgres>;
   constructor(databaseUrl: string, private readonly cipher: ConversationCipher, private readonly clock: () => Date = () => new Date()) {
-    this.sql = postgres(databaseUrl, { max: 5, connect_timeout: 5, idle_timeout: 20, onnotice: () => {}, connection: { application_name: "vegas-conversation-jobs" } });
+    this.sql = postgres(databaseUrl, { max: 5, connect_timeout: 5, idle_timeout: 20, onnotice: () => {}, connection: { application_name: "synthetic-conversation-jobs" } });
   }
 
   async enqueue(input: EnqueueConversationJobInput): Promise<ConversationJob> {

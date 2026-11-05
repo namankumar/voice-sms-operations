@@ -27,7 +27,7 @@ const SCHEMA = `
 export class PostgresRecordingTranscriptStore implements RecordingTranscriptStore {
   private readonly sql: Sql;
   constructor(databaseUrl: string, private readonly cipher: ConversationCipher) {
-    this.sql = postgres(databaseUrl, { max: 5, connect_timeout: 5, idle_timeout: 20, onnotice: () => {}, connection: { application_name: "vegas-recording-transcript" } });
+    this.sql = postgres(databaseUrl, { max: 5, connect_timeout: 5, idle_timeout: 20, onnotice: () => {}, connection: { application_name: "synthetic-recording-transcript" } });
   }
   async initialize(): Promise<void> { await this.sql.unsafe(SCHEMA); }
   async ready(): Promise<boolean> {

@@ -107,7 +107,7 @@ export class PostgresF2SyntheticPracticeStore {
     private readonly now: () => Date = () => new Date(), private readonly maxAuthorityTtlMs = MAX_AUTHORITY_TTL_MS,
     private readonly controlledOfferExpiry?: Pick<PostgresControlledOfferExpiry, "consume">) {
     if (!Number.isInteger(maxAuthorityTtlMs) || maxAuthorityTtlMs <= 0 || maxAuthorityTtlMs > MAX_AUTHORITY_TTL_MS) throw new Error("synthetic_authority_ttl_invalid");
-    this.sql = postgres(databaseUrl, { max: 5, connect_timeout: 5, idle_timeout: 20, onnotice: () => {}, connection: { application_name: "vegas-f2-synthetic-practice" } });
+    this.sql = postgres(databaseUrl, { max: 5, connect_timeout: 5, idle_timeout: 20, onnotice: () => {}, connection: { application_name: "synthetic-f2-synthetic-practice" } });
   }
 
   async ready(): Promise<boolean> {

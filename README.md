@@ -1,4 +1,10 @@
-# Voice + SMS Operations: Offline Benchmark Slice
+# Voice + SMS Operations
+
+## Actual staff dashboard
+
+The [original staff dashboard](docs/STAFF-DASHBOARD.md) is included with its renderer, browser client, staff handler and original tests. Run `pnpm dashboard:preview` to produce a static browser preview with fictional data and no live access. The preview calls the actual renderer. [Verification and benchmark evidence](docs/VERIFICATION.md) distinguish offline software checks from unproven caller/model and comparative claims.
+
+## Voice evaluation slice
 
 This repository contains the original authority-gated operations core plus a source-authentic, sanitized offline voice-receptionist fixture. It is designed to make a narrow claim reproducible: a controlled synthetic input can pass through signed local admission, local SIP binding, durable PostgreSQL readback, and a response-frame observation without contacting a carrier, model, speech provider, or external network.
 
@@ -30,7 +36,7 @@ pnpm test
 pnpm typecheck
 ```
 
-Expected result: 36 passing tests. This includes the original 22 core authority tests, 10 local signed-admission/SIP/PostgreSQL harness tests, and 4 scorecard tests.
+The suite contains 97 tests: the original 22 core authority tests, 10 local signed-admission/SIP/PostgreSQL harness tests, 4 scorecard tests, and 61 staff-dashboard tests. The PostgreSQL harness requires `initdb`, `pg_ctl` and `psql`; see the current [verification receipt](docs/VERIFICATION.md) for measured results and environment limits.
 
 The harness deliberately treats its own joined evidence as lower tier:
 

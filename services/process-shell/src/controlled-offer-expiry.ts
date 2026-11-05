@@ -252,7 +252,7 @@ function equivalentPacificTimeZone(actual: "pacific" | "pst" | "pdt", expected: 
   const day = Number(match[2]), year = Number(match[3]);
   if (month < 0 || !Number.isInteger(day) || !Number.isInteger(year)
     || new Date(Date.UTC(year, month, day)).getUTCDate() !== day) return false;
-  const zoneNames = [8, 20].map((hour) => new Intl.DateTimeFormat("en-US", { timeZone: "UTC", timeZoneName: "short" })
+  const zoneNames = [8, 20].map((hour) => new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", timeZoneName: "short" })
     .formatToParts(new Date(Date.UTC(year, month, day, hour))).find((part) => part.type === "timeZoneName")?.value.toLowerCase());
   return zoneNames[0] === zoneNames[1] && (actual === "pacific" ? expected : actual) === zoneNames[0];
 }

@@ -4,12 +4,13 @@ import { ConversationConflict, commandSchema, type Conversation, type Conversati
 import type { ConversationStore, PostgresConversationStore, TransitionReceipt } from "./conversation-store.js";
 import type { CallerProvidedIdentity } from "./f2-synthetic-practice-store.js";
 import { queueFilterSchema } from "./conversation-query.js";
-import type { ConversationConsoleInput, ConversationTranscriptView } from "./conversation-console.js";
+import type { ConversationConsoleInput, ConversationTranscriptView, LiveConversationReviewView } from "./conversation-console.js";
 import type { AuthenticatedStaffExtension } from "./staff-extension.js";
 import { serveStaffEvents } from "./staff-events.js";
 import { CONVERSATION_CONSOLE_CLIENT_JS } from "./conversation-console-client.js";
 import type { CallRecordingList, TwilioCallRecordingsPort } from "./twilio-call-recordings.js";
 import type { PostgresRecordingTranscriptStore } from "./recording-transcript-store.js";
+import type { PostgresLiveConversationReviewStore } from "./live-conversation-review-store.js";
 
 export interface ConversationConsoleView {
   rows: readonly Conversation[];
@@ -26,6 +27,7 @@ export interface ConversationConsoleView {
   callerProvidedIdentity?: CallerProvidedIdentity | null;
   recordings?: CallRecordingList | { state: "not_enabled" };
   transcripts?: ConversationTranscriptView;
+  liveReview?: LiveConversationReviewView;
 }
 export type CallerProvidedIdentityResolver = (scope: ConversationScope) => Promise<CallerProvidedIdentity | null>;
 const uuid = z.string().uuid();
@@ -49,6 +51,8 @@ export function createConversationStaffExtension(options: {
   heartbeatMs?: number;
   recordings?: Pick<TwilioCallRecordingsPort, "list" | "audio">;
   transcripts?: Pick<PostgresRecordingTranscriptStore, "getByConversation">;
+  /** Retention-bounded, encrypted live-event reader. It is never an audio or transcript fallback. */
+  liveReviews?: Pick<PostgresLiveConversationReviewStore, "list" | "purgeExpired">;
 }): AuthenticatedStaffExtension {
   const { store, practiceId, instanceId } = options;
   return {
@@ -135,6 +139,7 @@ export function createConversationStaffExtension(options: {
       let callerProvidedIdentity: CallerProvidedIdentity | null | undefined;
       let recordings: ConversationConsoleView["recordings"];
       let transcripts: ConversationConsoleView["transcripts"];
+      let liveReview: ConversationConsoleView["liveReview"];
       const selectedId = url.searchParams.get("selected");
       if (selectedId !== null) {
         if (!uuid.safeParse(selectedId).success) return reply(response, 400, { error: "invalid_selection" });
@@ -158,12 +163,20 @@ export function createConversationStaffExtension(options: {
             try { transcripts = await options.transcripts.getByConversation(scope); }
             catch { transcripts = "unavailable"; }
           }
+          if (options.liveReviews === undefined) liveReview = "not_retained";
+          else {
+            try {
+              // Bounded, authenticated-read maintenance only: never media or save work.
+              await options.liveReviews.purgeExpired(100);
+              liveReview = await options.liveReviews.list({ practiceId, instanceId, accountSid: selected.admission.accountId, callSid: selected.admission.externalId });
+            } catch { liveReview = "unavailable"; }
+          }
         }
       }
       const rendered = options.render({ rows, channel, selected, history, csrfToken, actor, page, total, filter: filter.data,
         ...(projection ? { metricCounts: projection.metrics } : {}), ...(historyProjection ? { historyProjection } : {}),
         ...(callerProvidedIdentity !== undefined ? { callerProvidedIdentity } : {}), ...(recordings === undefined ? {} : { recordings }),
-        ...(transcripts === undefined ? {} : { transcripts }) });
+        ...(transcripts === undefined ? {} : { transcripts }), ...(liveReview === undefined ? {} : { liveReview }) });
       if (url.pathname.endsWith("/snapshot")) return reply(response, 200, rendered);
       response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY", "Referrer-Policy": "no-referrer", "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; media-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'" });
       response.end(context.renderDocument(rendered.title, rendered.body));

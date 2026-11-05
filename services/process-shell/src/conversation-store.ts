@@ -24,7 +24,7 @@ export class ConversationCipher {
   digest(value: unknown): string { return createHmac("sha256", this.key).update(canonical(value)).digest("hex"); }
   protect(value: unknown, binding: unknown): object {
     const iv = randomBytes(12), cipher = createCipheriv("aes-256-gcm", this.key, iv);
-    cipher.setAAD(Buffer.from(canonical({ domain: "vegas-conversation/v1", keyVersion: this.keyVersion, binding })));
+    cipher.setAAD(Buffer.from(canonical({ domain: "synthetic-conversation/v1", keyVersion: this.keyVersion, binding })));
     const bytes = Buffer.concat([cipher.update(JSON.stringify(value)), cipher.final()]);
     return { version: 1, keyVersion: this.keyVersion, iv: iv.toString("base64"), tag: cipher.getAuthTag().toString("base64"), ciphertext: bytes.toString("base64") };
   }
@@ -33,7 +33,7 @@ export class ConversationCipher {
     if (e?.version !== 1 || e.keyVersion !== this.keyVersion || typeof e.iv !== "string" || typeof e.tag !== "string" || typeof e.ciphertext !== "string") throw new Error("conversation_ciphertext_invalid");
     try {
       const decipher = createDecipheriv("aes-256-gcm", this.key, Buffer.from(e.iv, "base64"));
-      decipher.setAAD(Buffer.from(canonical({ domain: "vegas-conversation/v1", keyVersion: this.keyVersion, binding })));
+      decipher.setAAD(Buffer.from(canonical({ domain: "synthetic-conversation/v1", keyVersion: this.keyVersion, binding })));
       decipher.setAuthTag(Buffer.from(e.tag, "base64"));
       return JSON.parse(Buffer.concat([decipher.update(Buffer.from(e.ciphertext, "base64")), decipher.final()]).toString("utf8"));
     } catch { throw new Error("conversation_ciphertext_invalid"); }
@@ -139,7 +139,7 @@ const historyQuerySchema = z.object({
 export class PostgresConversationStore implements ConversationStore {
   private readonly sql: ReturnType<typeof postgres>;
   constructor(databaseUrl: string, private readonly cipher: ConversationCipher, private readonly clock: () => Date = () => new Date()) {
-    this.sql = postgres(databaseUrl, { max: 5, connect_timeout: 5, idle_timeout: 20, onnotice: () => {}, connection: { application_name: "vegas-voice-sms" } });
+    this.sql = postgres(databaseUrl, { max: 5, connect_timeout: 5, idle_timeout: 20, onnotice: () => {}, connection: { application_name: "synthetic-voice-sms" } });
   }
   private decode(row: Row): Conversation {
     const scope = { practiceId: row.practice_id, instanceId: row.instance_id, conversationId: row.id };
@@ -241,7 +241,7 @@ export class PostgresConversationStore implements ConversationStore {
           await this.writeQueueProjection(tx, state, row.contact_key);
           await tx`INSERT INTO voice_sms_events(practice_id,instance_id,conversation_id,event_id,command_hash,revision,protected_receipt,created_at)
             VALUES (${scope.practiceId},${scope.instanceId},${scope.conversationId},${command.eventId},${this.cipher.digest(command)},${state.revision},${tx.json(this.cipher.protect({ input: command, receipt }, binding(scope, state.revision, command.eventId)) as postgres.JSONValue)},${now}::timestamptz)`;
-          await tx`SELECT pg_notify('vegas_voice_sms_changed', ${JSON.stringify({ practiceId: scope.practiceId, instanceId: scope.instanceId, conversationId: scope.conversationId, revision: state.revision })})`;
+          await tx`SELECT pg_notify('synthetic_voice_sms_changed', ${JSON.stringify({ practiceId: scope.practiceId, instanceId: scope.instanceId, conversationId: scope.conversationId, revision: state.revision })})`;
         } else {
           await tx`UPDATE voice_sms_jobs SET state='canceled',updated_at=${now}::timestamptz
             WHERE practice_id=${scope.practiceId} AND instance_id=${scope.instanceId} AND conversation_id=${scope.conversationId}
@@ -320,7 +320,7 @@ export class PostgresConversationStore implements ConversationStore {
         await this.writeQueueProjection(tx, state, row.contact_key);
         await tx`INSERT INTO voice_sms_events(practice_id,instance_id,conversation_id,event_id,command_hash,revision,protected_receipt,created_at)
           VALUES (${scope.practiceId},${scope.instanceId},${scope.conversationId},${command.eventId},${this.cipher.digest(command)},${state.revision},${tx.json(this.cipher.protect({ input: command, receipt }, binding(scope, state.revision, command.eventId)) as postgres.JSONValue)},${now}::timestamptz)`;
-        await tx`SELECT pg_notify('vegas_voice_sms_changed', ${JSON.stringify({ practiceId: scope.practiceId, instanceId: scope.instanceId, conversationId: scope.conversationId, revision: state.revision })})`;
+        await tx`SELECT pg_notify('synthetic_voice_sms_changed', ${JSON.stringify({ practiceId: scope.practiceId, instanceId: scope.instanceId, conversationId: scope.conversationId, revision: state.revision })})`;
       };
       let row: Row | undefined;
       if (threads[0] !== undefined && threads[0].binding_hash !== bindingHash) throw new ConversationConflict("thread_binding_conflict");
@@ -383,7 +383,7 @@ export class PostgresConversationStore implements ConversationStore {
       const result: InboundSmsReceipt = { conversation: state, disposition: control === "STOP" ? "suppressed" : control === "HELP" ? "help" : "accepted", jobQueued };
       await tx`INSERT INTO voice_sms_inbound_events(practice_id,instance_id,provider_account_key,message_sid,thread_key,conversation_id,payload_hash,num_media,opt_out_type,protected_receipt,received_at)
         VALUES (${input.practiceId},${input.instanceId},${providerAccountKey},${input.messageSid},${threadKey},${scope.conversationId},${payloadHash},${input.numMedia},${control ?? null},${tx.json(this.cipher.protect(result, inboundBinding(threadKey, input.messageSid)) as postgres.JSONValue)},${now}::timestamptz)`;
-      await tx`SELECT pg_notify('vegas_voice_sms_changed', ${JSON.stringify({ practiceId: scope.practiceId, instanceId: scope.instanceId, conversationId: scope.conversationId, revision: state.revision })})`;
+      await tx`SELECT pg_notify('synthetic_voice_sms_changed', ${JSON.stringify({ practiceId: scope.practiceId, instanceId: scope.instanceId, conversationId: scope.conversationId, revision: state.revision })})`;
       return result;
     }) as InboundSmsReceipt;
   }
@@ -393,8 +393,10 @@ export class PostgresConversationStore implements ConversationStore {
       : this.cipher.digest([input.provider, input.accountId, input.channel, input.externalId]);
     // Existing voice admissions predate the nullable controlled fixture receipt.
     // Keep their exact hash shape so a carrier replay remains idempotent after rollout.
-    const { controlledHours, ...legacyAdmission } = input;
-    const admissionHash = this.cipher.digest(controlledHours === null ? legacyAdmission : input);
+    const { controlledHours, voicePlayback, ...legacyAdmission } = input;
+    const stableAdmission = voicePlayback === "legacy_sip" ? { ...legacyAdmission, ...(controlledHours === null ? {} : { controlledHours }) }
+      : { ...legacyAdmission, controlledHours, voicePlayback };
+    const admissionHash = this.cipher.digest(stableAdmission);
     // Suppression follows the sender number and recipient within its practice, across instance revisions.
     const contactKey = input.channel === "sms" ? v2TextContactKey(this.cipher, input, input.messageTransport)
       : this.cipher.digest([input.practiceId, input.provider, input.accountId, input.destination, input.contact]);
@@ -415,7 +417,7 @@ export class PostgresConversationStore implements ConversationStore {
       await tx`INSERT INTO voice_sms_conversations(practice_id,instance_id,id,admission_key,admission_hash,contact_key,channel,revision,protected_state,created_at,updated_at,transport_isolation_version)
         VALUES (${input.practiceId},${input.instanceId},${state.id},${admissionKey},${admissionHash},${contactKey},${input.channel},0,${tx.json(payload as postgres.JSONValue)},${state.createdAt},${state.updatedAt},${transportIsolationVersion})`;
       await this.writeQueueProjection(tx, state, contactKey);
-      await tx`SELECT pg_notify('vegas_voice_sms_changed', ${JSON.stringify({ practiceId: input.practiceId, instanceId: input.instanceId, conversationId: state.id, revision: state.revision })})`;
+      await tx`SELECT pg_notify('synthetic_voice_sms_changed', ${JSON.stringify({ practiceId: input.practiceId, instanceId: input.instanceId, conversationId: state.id, revision: state.revision })})`;
       return state;
     }) as Conversation;
   }
@@ -569,7 +571,7 @@ export class PostgresConversationStore implements ConversationStore {
       const protectedReceipt = this.cipher.protect({ input, receipt }, binding(s, state.revision, input.eventId));
       await tx`INSERT INTO voice_sms_events(practice_id,instance_id,conversation_id,event_id,command_hash,revision,protected_receipt,created_at)
         VALUES (${s.practiceId},${s.instanceId},${s.conversationId},${input.eventId},${hash},${state.revision},${tx.json(protectedReceipt as postgres.JSONValue)},${now})`;
-      if (error === null) await tx`SELECT pg_notify('vegas_voice_sms_changed', ${JSON.stringify({ practiceId: s.practiceId, instanceId: s.instanceId, conversationId: s.conversationId, revision: state.revision })})`;
+      if (error === null) await tx`SELECT pg_notify('synthetic_voice_sms_changed', ${JSON.stringify({ practiceId: s.practiceId, instanceId: s.instanceId, conversationId: s.conversationId, revision: state.revision })})`;
       return receipt;
   }
   async getEvent(raw: ConversationScope, eventId: string): Promise<{ input: CommandEnvelope; receipt: TransitionReceipt } | null> {
@@ -700,7 +702,7 @@ export class PostgresConversationStore implements ConversationStore {
     }) as Promise<ConversationHistoryProjection>;
   }
   async subscribe(scope: { practiceId: string; instanceId: string }, listener: (change: { conversationId: string; revision: number }) => void): Promise<() => Promise<void>> {
-    const subscription = await this.sql.listen("vegas_voice_sms_changed", (payload) => {
+    const subscription = await this.sql.listen("synthetic_voice_sms_changed", (payload) => {
       try {
         const event = JSON.parse(payload) as Record<string, unknown>;
         if (event.practiceId === scope.practiceId && event.instanceId === scope.instanceId && typeof event.conversationId === "string" && Number.isSafeInteger(event.revision)) {

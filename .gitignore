@@ -4,3 +4,8 @@ coverage/
 *.tsbuildinfo
 .env
 .env.*
+
+node_modules/
+.env
+.env.*
+staff-preview.html

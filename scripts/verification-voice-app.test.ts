@@ -25,7 +25,7 @@ describe("local application voice bridge", () => {
   afterEach(() => { vi.restoreAllMocks(); });
 
   it("rejects oversized corpus files and symlink escape before reading clip bytes", async () => {
-    const folder = await mkdtemp(join(tmpdir(), "vegas-voice-corpus-negative-"));
+    const folder = await mkdtemp(join(tmpdir(), "synthetic-voice-corpus-negative-"));
     try {
       const root = join(folder, "root");
       await mkdir(root);
@@ -54,7 +54,7 @@ describe("local application voice bridge", () => {
   });
 
   it("changes source fingerprint on edited bytes and rejects a source symlink escape", async () => {
-    const folder = await mkdtemp(join(tmpdir(), "vegas-voice-source-negative-"));
+    const folder = await mkdtemp(join(tmpdir(), "synthetic-voice-source-negative-"));
     try {
       const root = join(folder, "root");
       await mkdir(root);
@@ -115,7 +115,7 @@ describe("local application voice bridge", () => {
   });
 
   it.skipIf(!corpusAvailable)("runs signed admission and webhook with selected-source-labeled durable readback (uses public synthetic fixture)", async () => {
-    const folder = await mkdtemp(join(tmpdir(), "vegas-local-voice-"));
+    const folder = await mkdtemp(join(tmpdir(), "synthetic-local-voice-"));
     console.info(`local_voice_bridge_artifacts=${folder}`);
     const clip = await loadCallerFixture(fixtureSource);
     const evidencePath = join(folder, "local-evidence.json");
@@ -148,7 +148,7 @@ describe("local application voice bridge", () => {
   });
 
   it.skipIf(!corpusAvailable).each(["provider_rejected", "sideband_unavailable", "sideband_send_failed"] as const)("fails closed when %s and writes no success evidence (uses public synthetic fixture)", async (failureMode) => {
-    const folder = await mkdtemp(join(tmpdir(), "vegas-local-voice-fail-"));
+    const folder = await mkdtemp(join(tmpdir(), "synthetic-local-voice-fail-"));
     console.info(`local_voice_bridge_artifacts=${folder}`);
     const evidencePath = join(folder, "should-not-exist.json");
     const observed: unknown[] = [];

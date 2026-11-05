@@ -2,7 +2,7 @@ import { ConversationCipher, type PostgresConversationStore } from "./conversati
 import type { Conversation, ConversationScope } from "./conversation-contract.js";
 import { F2ExecutionGateway } from "./f2-execution-gateway.js";
 import { F2HandoffService } from "./f2-handoff.js";
-import { vegasVascularKnowledgePack } from "./f2-knowledge.js";
+import { syntheticVascularKnowledgePack } from "./f2-knowledge.js";
 import { F2RuntimeContext } from "./f2-runtime-context.js";
 import { F2SmsAuthorityResolver, F2SmsConsentService } from "./f2-sms-consent.js";
 import { createF2SmsTurn, OpenAIF2SmsTextInterpreter, type F2TextTransport, type F2SmsFailure } from "./f2-sms-turn.js";
@@ -67,7 +67,7 @@ export function createF2Runtime(options: {
     ...(voiceConsent === undefined ? {} : { voiceConsent }),
     handoffs: new F2HandoffService({ store: options.conversations, instance,
       ...(options.controlledTransfer === undefined ? {} : { controlledTransfer: options.controlledTransfer }) }) });
-  const versions = { model: options.textModel, knowledgeVersion: vegasVascularKnowledgePack.packVersion, policyVersion: instance.configVersion };
+  const versions = { model: options.textModel, knowledgeVersion: syntheticVascularKnowledgePack.packVersion, policyVersion: instance.configVersion };
   const context = new F2RuntimeContext({ conversations: options.conversations, practice, dataset, ...versions,
     voiceMutationEnabled: voiceConsent !== undefined });
   const delivery = new F2ReadDeliveryService({ conversations: options.conversations, practice, dataset });
