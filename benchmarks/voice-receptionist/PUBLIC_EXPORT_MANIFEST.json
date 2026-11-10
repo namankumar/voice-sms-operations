@@ -35,7 +35,7 @@
     "scope": "Entire staged public tree, excluding this manifest. Aggregate hashes canonical JSON file/digest entries sorted by path.",
     "trackedFileCount": 188,
     "contentFileCountExcludingManifest": 187,
-    "aggregateSha256ExcludingManifest": "sha256:b1842b467ff5777741fda2cc78a7539b33e5ea66b34c1a81dccc2b0b9be85348",
+    "aggregateSha256ExcludingManifest": "sha256:1cfbf4a0f49648d41f8a2a1a8aaf1e46ab193e33f4804bc80076e9de0c74bac1",
     "files": [
       {
         "path": ".gitignore",
@@ -43,7 +43,7 @@
       },
       {
         "path": "README.md",
-        "sha256": "65a7d59d0807b12824be74a2a00b463e0001c1a02a71d6503dec374c0fc88827"
+        "sha256": "d89d47f5d2e4d4476afe4b8aa3ff751acda6cd6e38b30a778a1514dd917d6e6c"
       },
       {
         "path": "benchmarks/voice-receptionist/fixtures/synthetic/audio-manifest.json",
@@ -175,15 +175,15 @@
       },
       {
         "path": "docs/STAFF-DASHBOARD.md",
-        "sha256": "cd40f425f9690d8678a96087548cb4d22b1349972d1ba09a8ba1f06e5787f8bd"
+        "sha256": "eddd44bda40283cce5275f50f34d8ce4396cbc6f3019996434b1364b10f8bb65"
       },
       {
         "path": "docs/VERIFICATION.md",
-        "sha256": "0be77bb9ef56feb772323da9cc12712c0b9fb9a352e5b8b86fa9ff57f8b63d89"
+        "sha256": "c9e59396ca5d1a67f964ab2a9f9a14f6d95e4fad4bb979c7ece1cdbc9a831a3f"
       },
       {
         "path": "docs/staff-dashboard-preview.html",
-        "sha256": "36893a5f39e73ee4097f1c214cb34b72d2fefff5e16046e465ac04288270e0c0"
+        "sha256": "69476d06d9d1362158c677315b739a52c18e63890539c9c23b6b658c7db62281"
       },
       {
         "path": "docs/verification.json",
@@ -251,7 +251,7 @@
       },
       {
         "path": "scripts/preview-staff-dashboard.ts",
-        "sha256": "d268b9fa08575069c82f3cebedaff7ce9c1bbfc015fb04672c6d0cfcbd80e0e0"
+        "sha256": "fa0fd0a7b4ac9b49758a376b4528da9760f3634f15a29d80008227f73fa770dd"
       },
       {
         "path": "scripts/verification-voice-app.test.ts",

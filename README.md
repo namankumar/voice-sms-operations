@@ -1,14 +1,44 @@
 # Voice + SMS Operations
 
-## Actual staff dashboard
+A caller can finish a conversation while the work they asked for is still sitting unowned. I built this system to track the request, the action behind it, and the person responsible for the next step.
 
-The [original staff dashboard](docs/STAFF-DASHBOARD.md) is included with its renderer, browser client, staff handler and original tests. Run `pnpm dashboard:preview` to produce a static browser preview with fictional data and no live access. The preview calls the actual renderer. [Verification and benchmark evidence](docs/VERIFICATION.md) distinguish offline software checks from unproven caller/model and comparative claims.
+This repo contains the TypeScript operations core and staff dashboard from that system. The dashboard shows conversation queues, request ownership, follow-up activity and evidence of what happened. The operations core checks permissions and reads back provider state before recording completion.
+
+## See the dashboard
+
+The quickest way to inspect the UI is the [committed preview](docs/staff-dashboard-preview.html): download it and open it in a browser. It uses fictional data and doesn't connect to a customer system.
+
+To generate it yourself, use Node 22+ and pnpm 11+:
+
+```sh
+pnpm install --frozen-lockfile --ignore-scripts
+pnpm dashboard:preview
+```
+
+Open `staff-preview.html`. This runs the actual renderer, but the preview is static: scripts, forms and network access are disabled. It doesn't make calls or send messages. The [dashboard guide](docs/STAFF-DASHBOARD.md) links the renderer, browser client and authenticated staff handler.
+
+## Check the software
+
+The dashboard checks don't need PostgreSQL or a provider account:
+
+```sh
+pnpm dashboard:test
+pnpm typecheck
+```
+
+For the full offline suite, put PostgreSQL command-line tools (`initdb`, `pg_ctl`, `psql`) on `PATH`, then run:
+
+```sh
+pnpm test
+```
+
+The fixture starts and removes its own loopback PostgreSQL cluster. It doesn't need credentials or an existing database server. The suite contains 97 tests across the operations core, signed admission/SIP/PostgreSQL fixture, scorecard and dashboard. See the [verification receipt](docs/VERIFICATION.md) for actual results and environment limits, rather than treating the test count as a pass claim.
 
 ## Voice evaluation slice
 
-This repository contains the original authority-gated operations core plus a source-authentic, sanitized offline voice-receptionist fixture. It is designed to make a narrow claim reproducible: a controlled synthetic input can pass through signed local admission, local SIP binding, durable PostgreSQL readback, and a response-frame observation without contacting a carrier, model, speech provider, or external network.
+The offline voice fixture checks signed local admission, local SIP binding, durable PostgreSQL readback and response-frame observation using controlled synthetic input. It never contacts a carrier, model or speech provider.
 
-It is not a production voice demo and it makes no claim that a caller bridge, handset audio, ASR, model reasoning, TTS, transfer, callback, SMS delivery, or cost was verified.
+A live phone demo needs the private deployment and separately authorized services. This fixture does not verify caller audio, ASR, model reasoning, TTS, transfer, callback or SMS delivery.
 
 ## What the offline benchmark proves
 
@@ -25,18 +55,6 @@ outcome inconclusive]
 ```
 
 The fixture never dials, sends an SMS, records a call, or calls a provider endpoint. Local `fetch` is restricted by the harness to loopback HTTP. The synthetic WAV is one second of silence paired with a generic scheduling transcript; it is a supplied input, not ASR evidence.
-
-## Run it locally
-
-Requirements: Node 22+, pnpm 11+, and PostgreSQL command-line tools (`initdb`, `pg_ctl`, `psql`) on `PATH`. The fixture creates and removes a local loopback PostgreSQL cluster; it does not need a database server or credentials.
-
-```sh
-pnpm install --frozen-lockfile --ignore-scripts
-pnpm test
-pnpm typecheck
-```
-
-The suite contains 97 tests: the original 22 core authority tests, 10 local signed-admission/SIP/PostgreSQL harness tests, 4 scorecard tests, and 61 staff-dashboard tests. The PostgreSQL harness requires `initdb`, `pg_ctl` and `psql`; see the current [verification receipt](docs/VERIFICATION.md) for measured results and environment limits.
 
 The harness deliberately treats its own joined evidence as lower tier:
 

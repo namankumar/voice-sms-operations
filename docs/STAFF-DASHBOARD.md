@@ -12,7 +12,7 @@ pnpm dashboard:preview
 pnpm dashboard:test
 ```
 
-Open `staff-preview.html` in a browser, or download the [committed static preview](staff-dashboard-preview.html). The preview invokes the original renderer with a fictional conversation; it is a static presentation, with scripts, forms and network disabled by CSP. It does not connect to calls, recordings, customer records, a database or a live gateway. The small preview wrapper is new packaging; it does not replace the original dashboard implementation.
+Open `staff-preview.html` in a browser, or download the [committed static preview](staff-dashboard-preview.html). The preview invokes the original renderer with a fictional conversation; it is a static presentation: scripts are removed, forms are inert and blocked by CSP, and navigation links are disabled except for in-page anchors. CSP blocks network resources. It does not connect to calls, recordings, customer records, a database or a live gateway. The small preview wrapper is new packaging; it supplies self-contained shell styles that the renderer expects around its output. Those preview styles are not an export of the private application shell, and they do not replace the original dashboard implementation.
 
 The selected original renderer/handler tests use fictional state and local fake ports. Their staff HTTP tests use ephemeral loopback servers only. They check rendering, escaping, ownership/receipt display and scoped requests; they are not production caller, audio, ASR, TTS or model evaluation. See [verification and evidence limits](VERIFICATION.md).
 

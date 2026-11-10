@@ -17,3 +17,15 @@ Commands: `pnpm dashboard:test`, `pnpm typecheck`, `pnpm dashboard:preview`. The
 No reproducible public benchmark record was located that establishes superiority over human operators or another phone system. The retained project description reports a scoped historical comparison, but the necessary scenario set, metric definitions, sample sizes, comparator settings and attributable outcome receipts were not available for publication. Therefore this release makes no numerical or general comparative-performance claim.
 
 Production/provider reports, private audio/transcripts, real patient or staff details, raw client logs and account/billing records are not included. Offline tests are not substituted for an actual-model/audio comparison. Any future comparative report needs a defined task set, matched arms, explicit scoring, version-bound evidence and a privacy-reviewed aggregate result.
+
+## November 10, 2026: fresh dashboard setup and preview repair
+
+A clean tracked-file copy installed dependencies with `pnpm install --frozen-lockfile --ignore-scripts`. The 61 original dashboard tests and TypeScript check passed. The preview generated without a database or provider configuration.
+
+Visual inspection found that the public wrapper lacked the private application shell's base styles. Added self-contained, preview-only shell styles without changing the original renderer or staff handler. Re-ran all 61 dashboard tests and typecheck; regenerated the committed static preview. A fresh-dependency copy produced matching preview HTML after normalizing the renderer's random hidden form event IDs.
+
+Inspected Chrome screenshots at exact 1440 × 1100 and 390 × 1100 CSS-pixel viewports. The queue and detail panel render with readable styling at both widths; measured document width equals viewport width (no page-wide horizontal overflow). The preview still removes scripts and retains a CSP blocking network and form submission. This checks static presentation, not interactive actions or live calls.
+
+The full PostgreSQL-dependent suite was not rerun in this check. Previous full-suite limits remain in effect. No model, carrier or customer-system calls were made.
+
+Independent preview review caught root-relative navigation links that CSP alone does not disable. The preview wrapper now removes every non-fragment anchor destination, marks those four links disabled, and makes both forms inert. The original renderer is unchanged. Re-ran 61 dashboard tests and typecheck. In isolated Chrome, verified zero script tags, zero non-fragment link destinations and two inert forms; clicking the disabled links and form buttons left the URL unchanged and produced zero network requests. The in-page transcript anchor remains available.
